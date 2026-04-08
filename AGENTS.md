@@ -91,3 +91,28 @@ Misc. tribal knowledge
 - Kanban is launched from the user's shell and inherits its environment. For agent detection and task-agent startup, prefer direct PATH checks and direct process launches over spawning an interactive shell. Avoid `zsh -i`, shell fallback command discovery, or "launch shell then type command into it" on hot paths. On setups with heavy shell init like `conda` or `nvm`, doing that per task can freeze the runtime and even make new Terminal.app windows feel hung when several tasks start at once. It's fine to use an actual interactive shell for explicit shell terminals, not for normal agent session work.
 - If CI hangs on Node 22 after tests seem to finish, suspect a live subprocess or SDK-host startup path before assuming a slow test body. Read `.plan/docs/node22-ci-hanging-tests-investigation.md` before repeating that investigation. `test/runtime/cline-sdk/cline-task-session-service.test.ts` was the big prior culprit because a unit-style suite was still booting the real Cline SDK host.
 - When Kanban runs on a headless remote Linux instance (for example over SSH+tunnel), native folder picker commands may be unavailable (`zenity`/`kdialog`). Treat this as a normal remote-runtime limitation and use manual path entry fallback instead of requiring desktop packages.
+- Adding a new board column with automatic prompts and gates touches more files than it first appears. The minimum pass usually spans:
+  - shared column enums/order and normalization: `src/core/api-contract.ts`, `src/state/workspace-state.ts`, `web-ui/src/data/board-data.ts`, `web-ui/src/state/board-state.ts`
+  - drag/order/detail-view affordances: `web-ui/src/state/drag-rules.ts`, `web-ui/src/utils/detail-view-task-order.ts`, `web-ui/src/components/kanban-board.tsx`, `web-ui/src/components/dependencies/dependency-overlay.tsx`, `web-ui/src/components/board-card.tsx`, `web-ui/src/components/card-detail-view.tsx`
+  - project counts and CLI/runtime surfaces: `src/server/workspace-registry.ts`, `web-ui/src/hooks/app-utils.tsx`, `web-ui/src/components/project-navigation-panel.tsx`, `src/commands/task.ts`
+  - settings/config plumbing for prompt templates: `src/config/runtime-config.ts`, `src/terminal/agent-registry.ts`, `web-ui/src/runtime/use-runtime-config.ts`, `web-ui/src/App.tsx`, `web-ui/src/components/runtime-settings-dialog.tsx`
+  - automation state machine and tests: `web-ui/src/hooks/use-board-interactions.ts`, `web-ui/src/hooks/use-board-interactions.test.tsx`
+- For gated automation columns, keep the stage contract explicit:
+  - each gate column needs a prompt template, a failure follow-up template, and fixed pass/fail sentinel strings in the final assistant message
+  - the automation hook should only advance on explicit pass signals and only bounce back on explicit failure signals; never treat a generic `awaiting_review` completion as success
+  - if a stage failure routes the task back to `in_progress`, queue the corrective follow-up prompt separately from the “failure already handled” state so retries do not get suppressed
+- In `web-ui/src/hooks/use-board-interactions.ts`, never call `tryProgrammaticCardMove()` from inside a `setBoard(...)` updater. That triggers React render-phase update warnings with DnD/`flushSync`. Compute transitions in the effect body, then call `setBoard(nextBoard)` after the loop.
+- Stage automation depends on the card actually landing in the next column. The automation effect must depend on `board`, not only `sessions`, and prompt-send logic should key off “entered stage version” refs so the prompt fires after the card is in the stage.
+- Use separate refs per gated stage for:
+  - the session version when the task entered the stage
+  - the session version whose stage prompt has already been sent
+  - the session version whose failure has already been handled
+  - the session version whose failure follow-up prompt has already been sent
+- Automated prompts should be sent as `paste` followed by an explicit `"\r"` submit, with a few short retries. Pasting alone is not enough for these stage transitions.
+- When adding a new gated column, extend the focused automation tests before trusting the UI manually. At minimum, cover:
+  - entry into the stage sends the stage prompt
+  - no progress without a new post-stage completion event
+  - no progress without an explicit pass signal
+  - failure signal routes back and sends the failure prompt
+  - pass signal advances to the next column
+- After adding a new column, expect supporting test fixtures that hardcode counts or column arrays to fail typecheck until they include the new column, especially project/task-count tests and small hook harness board builders.
