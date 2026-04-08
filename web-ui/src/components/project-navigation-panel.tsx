@@ -82,6 +82,7 @@ export function ProjectNavigationPanel({
 	const pendingProjectTaskCount = pendingProjectRemoval
 		? pendingProjectRemoval.taskCounts.backlog +
 			pendingProjectRemoval.taskCounts.in_progress +
+			pendingProjectRemoval.taskCounts.test +
 			pendingProjectRemoval.taskCounts.review +
 			pendingProjectRemoval.taskCounts.trash
 		: 0;
@@ -572,6 +573,13 @@ function ProjectRow({
 			shortLabel: "IP",
 			toneClassName: "bg-accent/20 text-accent",
 			count: project.taskCounts.in_progress,
+		},
+		{
+			id: "test",
+			title: "Test",
+			shortLabel: "TS",
+			toneClassName: "bg-status-orange/20 text-status-orange",
+			count: project.taskCounts.test,
 		},
 		{
 			id: "review",

@@ -45,6 +45,29 @@ interface PendingProgrammaticStartMoveCompletion {
 	timeoutId: number;
 }
 
+const TEST_FAILED_SIGNAL = "TEST FAILED";
+const DEFAULT_TEST_PROMPT = `Run the relevant tests now.
+
+If any test fails, include "${TEST_FAILED_SIGNAL}" in your final message.
+If tests pass, include "TEST PASSED" in your final message.`;
+const DEFAULT_TEST_FAILURE_PROMPT =
+	"Tests failed. Investigate the failing test output, fix the issue, and complete the task so it can be tested again.";
+
+function resolveTestPromptTemplate(template: string): string {
+	const trimmed = template.trim();
+	return trimmed.length > 0 ? trimmed : DEFAULT_TEST_PROMPT;
+}
+
+function resolveTestFailurePromptTemplate(template: string): string {
+	const trimmed = template.trim();
+	return trimmed.length > 0 ? trimmed : DEFAULT_TEST_FAILURE_PROMPT;
+}
+
+function hasTestFailureSignal(summary: RuntimeTaskSessionSummary): boolean {
+	const finalMessage = summary.latestHookActivity?.finalMessage?.trim() ?? "";
+	return finalMessage.toUpperCase().includes(TEST_FAILED_SIGNAL);
+}
+
 interface UseBoardInteractionsInput {
 	board: BoardData;
 	setBoard: Dispatch<SetStateAction<BoardData>>;
@@ -67,6 +90,8 @@ interface UseBoardInteractionsInput {
 		options?: SendTerminalInputOptions,
 	) => Promise<{ ok: boolean; message?: string }>;
 	readyForReviewNotificationsEnabled: boolean;
+	testPromptTemplate: string;
+	testFailurePromptTemplate: string;
 	taskGitActionLoadingByTaskId: Record<string, TaskGitActionLoadingStateLike>;
 	runAutoReviewGitAction: (taskId: string, action: TaskGitAction) => Promise<boolean>;
 }
@@ -111,6 +136,8 @@ export function useBoardInteractions({
 	fetchTaskWorkspaceInfo,
 	sendTaskSessionInput,
 	readyForReviewNotificationsEnabled,
+	testPromptTemplate,
+	testFailurePromptTemplate,
 	taskGitActionLoadingByTaskId,
 	runAutoReviewGitAction,
 }: UseBoardInteractionsInput): UseBoardInteractionsResult {
@@ -120,6 +147,8 @@ export function useBoardInteractions({
 	const pendingProgrammaticStartMoveCompletionByTaskIdRef = useRef<
 		Record<string, PendingProgrammaticStartMoveCompletion>
 	>({});
+	const processedTestPromptSessionVersionByTaskIdRef = useRef<Record<string, number>>({});
+	const processedTestFailurePromptSessionVersionByTaskIdRef = useRef<Record<string, number>>({});
 	const [moveToTrashLoadingById, setMoveToTrashLoadingById] = useState<Record<string, boolean>>({});
 	const {
 		handleProgrammaticCardMoveReady,
@@ -430,6 +459,8 @@ export function useBoardInteractions({
 	);
 
 	useEffect(() => {
+		const queuedTestPrompts: Array<{ taskId: string; updatedAt: number }> = [];
+		const queuedTestFailurePrompts: Array<{ taskId: string; updatedAt: number }> = [];
 		setBoard((currentBoard) => {
 			let nextBoard = currentBoard;
 			const previousSessions = previousSessionsRef.current;
@@ -441,6 +472,46 @@ export function useBoardInteractions({
 				}
 				const columnId = getTaskColumnId(nextBoard, summary.taskId);
 				if (summary.state === "awaiting_review" && columnId === "in_progress") {
+					const programmaticMoveAttempt = tryProgrammaticCardMove(summary.taskId, columnId, "test");
+					if (programmaticMoveAttempt === "started" || programmaticMoveAttempt === "blocked") {
+						queuedTestPrompts.push({
+							taskId: summary.taskId,
+							updatedAt: summary.updatedAt,
+						});
+						continue;
+					}
+					const moved = moveTaskToColumn(nextBoard, summary.taskId, "test", { insertAtTop: true });
+					if (moved.moved) {
+						nextBoard = moved.board;
+						queuedTestPrompts.push({
+							taskId: summary.taskId,
+							updatedAt: summary.updatedAt,
+						});
+					}
+					continue;
+				}
+				if (summary.state === "awaiting_review" && columnId === "test") {
+					if (hasTestFailureSignal(summary)) {
+						const programmaticMoveAttempt = tryProgrammaticCardMove(summary.taskId, columnId, "in_progress", {
+							skipKickoff: true,
+						});
+						if (programmaticMoveAttempt === "started" || programmaticMoveAttempt === "blocked") {
+							queuedTestFailurePrompts.push({
+								taskId: summary.taskId,
+								updatedAt: summary.updatedAt,
+							});
+							continue;
+						}
+						const moved = moveTaskToColumn(nextBoard, summary.taskId, "in_progress", { insertAtTop: true });
+						if (moved.moved) {
+							nextBoard = moved.board;
+							queuedTestFailurePrompts.push({
+								taskId: summary.taskId,
+								updatedAt: summary.updatedAt,
+							});
+						}
+						continue;
+					}
 					const programmaticMoveAttempt = tryProgrammaticCardMove(summary.taskId, columnId, "review");
 					if (programmaticMoveAttempt === "started" || programmaticMoveAttempt === "blocked") {
 						continue;
@@ -504,7 +575,55 @@ export function useBoardInteractions({
 			previousSessionsRef.current = nextPreviousSessions;
 			return nextBoard;
 		});
-	}, [programmaticCardMoveCycle, sessions, setBoard, setSelectedTaskId, tryProgrammaticCardMove]);
+		const resolvedTestPromptTemplate = resolveTestPromptTemplate(testPromptTemplate);
+		for (const queued of queuedTestPrompts) {
+			if (processedTestPromptSessionVersionByTaskIdRef.current[queued.taskId] === queued.updatedAt) {
+				continue;
+			}
+			processedTestPromptSessionVersionByTaskIdRef.current[queued.taskId] = queued.updatedAt;
+			void sendTaskSessionInput(queued.taskId, resolvedTestPromptTemplate, { mode: "paste" }).then((result) => {
+				if (result.ok) {
+					return;
+				}
+				showAppToast({
+					intent: "danger",
+					icon: "warning-sign",
+					message: result.message ?? "Could not run task test prompt.",
+					timeout: 7000,
+				});
+			});
+		}
+
+		const resolvedTestFailurePromptTemplate = resolveTestFailurePromptTemplate(testFailurePromptTemplate);
+		for (const queued of queuedTestFailurePrompts) {
+			if (processedTestFailurePromptSessionVersionByTaskIdRef.current[queued.taskId] === queued.updatedAt) {
+				continue;
+			}
+			processedTestFailurePromptSessionVersionByTaskIdRef.current[queued.taskId] = queued.updatedAt;
+			void sendTaskSessionInput(queued.taskId, resolvedTestFailurePromptTemplate, { mode: "paste" }).then(
+				(result) => {
+					if (result.ok) {
+						return;
+					}
+					showAppToast({
+						intent: "danger",
+						icon: "warning-sign",
+						message: result.message ?? "Could not send test-failure follow-up prompt.",
+						timeout: 7000,
+					});
+				},
+			);
+		}
+	}, [
+		programmaticCardMoveCycle,
+		sessions,
+		sendTaskSessionInput,
+		setBoard,
+		setSelectedTaskId,
+		testFailurePromptTemplate,
+		testPromptTemplate,
+		tryProgrammaticCardMove,
+	]);
 
 	const { confirmMoveTaskToTrash, handleCreateDependency, handleDeleteDependency, requestMoveTaskToTrash } =
 		useLinkedBacklogTaskActions({
@@ -866,6 +985,8 @@ export function useBoardInteractions({
 	const resetBoardInteractionsState = useCallback(() => {
 		previousSessionsRef.current = {};
 		moveToTrashLoadingByIdRef.current = {};
+		processedTestPromptSessionVersionByTaskIdRef.current = {};
+		processedTestFailurePromptSessionVersionByTaskIdRef.current = {};
 		setMoveToTrashLoadingById({});
 		for (const taskId of Object.keys(pendingProgrammaticStartMoveCompletionByTaskIdRef.current)) {
 			resolvePendingProgrammaticStartMove(taskId, false);

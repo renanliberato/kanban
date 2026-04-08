@@ -17,6 +17,8 @@ interface RuntimeGlobalConfigFileShape {
 	readyForReviewNotificationsEnabled?: boolean;
 	commitPromptTemplate?: string;
 	openPrPromptTemplate?: string;
+	testPromptTemplate?: string;
+	testFailurePromptTemplate?: string;
 }
 
 interface RuntimeProjectConfigFileShape {
@@ -33,8 +35,12 @@ export interface RuntimeConfigState {
 	shortcuts: RuntimeProjectShortcut[];
 	commitPromptTemplate: string;
 	openPrPromptTemplate: string;
+	testPromptTemplate?: string;
+	testFailurePromptTemplate?: string;
 	commitPromptTemplateDefault: string;
 	openPrPromptTemplateDefault: string;
+	testPromptTemplateDefault?: string;
+	testFailurePromptTemplateDefault?: string;
 }
 
 export interface RuntimeConfigUpdateInput {
@@ -45,6 +51,8 @@ export interface RuntimeConfigUpdateInput {
 	shortcuts?: RuntimeProjectShortcut[];
 	commitPromptTemplate?: string;
 	openPrPromptTemplate?: string;
+	testPromptTemplate?: string;
+	testFailurePromptTemplate?: string;
 }
 
 const RUNTIME_HOME_PARENT_DIR = ".cline";
@@ -99,6 +107,27 @@ Steps:
    - Base branch
    - Head branch
    - Any follow-up needed`;
+const DEFAULT_TEST_PROMPT_TEMPLATE = `Run the project's tests relevant to the task and evaluate the result.
+
+Rules:
+- Execute the best available automated tests for the changed behavior.
+- Include the exact test command(s) used.
+- If any test fails, your final line must include: TEST FAILED
+- If tests pass, your final line must include: TEST PASSED
+
+Return:
+- Short summary of what was tested
+- Key failures (if any)
+- Final line with either TEST FAILED or TEST PASSED`;
+const DEFAULT_TEST_FAILURE_PROMPT_TEMPLATE = `Tests failed. Investigate and fix the failing tests.
+
+Steps:
+1. Reproduce the failure.
+2. Apply the minimal code changes needed to make tests pass.
+3. Re-run the relevant tests.
+4. Summarize what failed and what was fixed.
+
+When finished, hand off for another test run.`;
 
 export function pickBestInstalledAgentIdFromDetected(detectedCommands: readonly string[]): RuntimeAgentId | null {
 	const detected = new Set(detectedCommands);
@@ -286,8 +315,15 @@ function toRuntimeConfigState({
 			globalConfig?.openPrPromptTemplate,
 			DEFAULT_OPEN_PR_PROMPT_TEMPLATE,
 		),
+		testPromptTemplate: normalizePromptTemplate(globalConfig?.testPromptTemplate, DEFAULT_TEST_PROMPT_TEMPLATE),
+		testFailurePromptTemplate: normalizePromptTemplate(
+			globalConfig?.testFailurePromptTemplate,
+			DEFAULT_TEST_FAILURE_PROMPT_TEMPLATE,
+		),
 		commitPromptTemplateDefault: DEFAULT_COMMIT_PROMPT_TEMPLATE,
 		openPrPromptTemplateDefault: DEFAULT_OPEN_PR_PROMPT_TEMPLATE,
+		testPromptTemplateDefault: DEFAULT_TEST_PROMPT_TEMPLATE,
+		testFailurePromptTemplateDefault: DEFAULT_TEST_FAILURE_PROMPT_TEMPLATE,
 	};
 }
 
@@ -309,6 +345,8 @@ async function writeRuntimeGlobalConfigFile(
 		readyForReviewNotificationsEnabled?: boolean;
 		commitPromptTemplate?: string;
 		openPrPromptTemplate?: string;
+		testPromptTemplate?: string;
+		testFailurePromptTemplate?: string;
 	},
 ): Promise<void> {
 	const existing = await readRuntimeConfigFile<RuntimeGlobalConfigFileShape>(configPath);
@@ -337,6 +375,14 @@ async function writeRuntimeGlobalConfigFile(
 		config.openPrPromptTemplate === undefined
 			? DEFAULT_OPEN_PR_PROMPT_TEMPLATE
 			: normalizePromptTemplate(config.openPrPromptTemplate, DEFAULT_OPEN_PR_PROMPT_TEMPLATE);
+	const testPromptTemplate =
+		config.testPromptTemplate === undefined
+			? DEFAULT_TEST_PROMPT_TEMPLATE
+			: normalizePromptTemplate(config.testPromptTemplate, DEFAULT_TEST_PROMPT_TEMPLATE);
+	const testFailurePromptTemplate =
+		config.testFailurePromptTemplate === undefined
+			? DEFAULT_TEST_FAILURE_PROMPT_TEMPLATE
+			: normalizePromptTemplate(config.testFailurePromptTemplate, DEFAULT_TEST_FAILURE_PROMPT_TEMPLATE);
 
 	const payload: RuntimeGlobalConfigFileShape = {};
 	if (selectedAgentId !== undefined) {
@@ -370,6 +416,15 @@ async function writeRuntimeGlobalConfigFile(
 	}
 	if (hasOwnKey(existing, "openPrPromptTemplate") || openPrPromptTemplate !== DEFAULT_OPEN_PR_PROMPT_TEMPLATE) {
 		payload.openPrPromptTemplate = openPrPromptTemplate;
+	}
+	if (hasOwnKey(existing, "testPromptTemplate") || testPromptTemplate !== DEFAULT_TEST_PROMPT_TEMPLATE) {
+		payload.testPromptTemplate = testPromptTemplate;
+	}
+	if (
+		hasOwnKey(existing, "testFailurePromptTemplate") ||
+		testFailurePromptTemplate !== DEFAULT_TEST_FAILURE_PROMPT_TEMPLATE
+	) {
+		payload.testFailurePromptTemplate = testFailurePromptTemplate;
 	}
 
 	await lockedFileSystem.writeJsonFileAtomic(configPath, payload, {
@@ -453,6 +508,8 @@ function createRuntimeConfigStateFromValues(input: {
 	shortcuts: RuntimeProjectShortcut[];
 	commitPromptTemplate: string;
 	openPrPromptTemplate: string;
+	testPromptTemplate?: string;
+	testFailurePromptTemplate?: string;
 }): RuntimeConfigState {
 	return {
 		globalConfigPath: input.globalConfigPath,
@@ -470,8 +527,15 @@ function createRuntimeConfigStateFromValues(input: {
 		shortcuts: normalizeShortcuts(input.shortcuts),
 		commitPromptTemplate: normalizePromptTemplate(input.commitPromptTemplate, DEFAULT_COMMIT_PROMPT_TEMPLATE),
 		openPrPromptTemplate: normalizePromptTemplate(input.openPrPromptTemplate, DEFAULT_OPEN_PR_PROMPT_TEMPLATE),
+		testPromptTemplate: normalizePromptTemplate(input.testPromptTemplate, DEFAULT_TEST_PROMPT_TEMPLATE),
+		testFailurePromptTemplate: normalizePromptTemplate(
+			input.testFailurePromptTemplate,
+			DEFAULT_TEST_FAILURE_PROMPT_TEMPLATE,
+		),
 		commitPromptTemplateDefault: DEFAULT_COMMIT_PROMPT_TEMPLATE,
 		openPrPromptTemplateDefault: DEFAULT_OPEN_PR_PROMPT_TEMPLATE,
+		testPromptTemplateDefault: DEFAULT_TEST_PROMPT_TEMPLATE,
+		testFailurePromptTemplateDefault: DEFAULT_TEST_FAILURE_PROMPT_TEMPLATE,
 	};
 }
 
@@ -486,6 +550,8 @@ export function toGlobalRuntimeConfigState(current: RuntimeConfigState): Runtime
 		shortcuts: [],
 		commitPromptTemplate: current.commitPromptTemplate,
 		openPrPromptTemplate: current.openPrPromptTemplate,
+		testPromptTemplate: current.testPromptTemplate,
+		testFailurePromptTemplate: current.testFailurePromptTemplate,
 	});
 }
 
@@ -521,6 +587,8 @@ export async function saveRuntimeConfig(
 		shortcuts: RuntimeProjectShortcut[];
 		commitPromptTemplate: string;
 		openPrPromptTemplate: string;
+		testPromptTemplate?: string;
+		testFailurePromptTemplate?: string;
 	},
 ): Promise<RuntimeConfigState> {
 	const { globalConfigPath, projectConfigPath } = resolveRuntimeConfigPaths(cwd);
@@ -532,6 +600,8 @@ export async function saveRuntimeConfig(
 			readyForReviewNotificationsEnabled: config.readyForReviewNotificationsEnabled,
 			commitPromptTemplate: config.commitPromptTemplate,
 			openPrPromptTemplate: config.openPrPromptTemplate,
+			testPromptTemplate: config.testPromptTemplate,
+			testFailurePromptTemplate: config.testFailurePromptTemplate,
 		});
 		await writeRuntimeProjectConfigFile(projectConfigPath, { shortcuts: config.shortcuts });
 		return createRuntimeConfigStateFromValues({
@@ -544,6 +614,8 @@ export async function saveRuntimeConfig(
 			shortcuts: config.shortcuts,
 			commitPromptTemplate: config.commitPromptTemplate,
 			openPrPromptTemplate: config.openPrPromptTemplate,
+			testPromptTemplate: config.testPromptTemplate,
+			testFailurePromptTemplate: config.testFailurePromptTemplate,
 		});
 	});
 }
@@ -565,6 +637,8 @@ export async function updateRuntimeConfig(cwd: string, updates: RuntimeConfigUpd
 			shortcuts: projectConfigPath ? (updates.shortcuts ?? current.shortcuts) : current.shortcuts,
 			commitPromptTemplate: updates.commitPromptTemplate ?? current.commitPromptTemplate,
 			openPrPromptTemplate: updates.openPrPromptTemplate ?? current.openPrPromptTemplate,
+			testPromptTemplate: updates.testPromptTemplate ?? current.testPromptTemplate,
+			testFailurePromptTemplate: updates.testFailurePromptTemplate ?? current.testFailurePromptTemplate,
 		};
 
 		const hasChanges =
@@ -574,6 +648,8 @@ export async function updateRuntimeConfig(cwd: string, updates: RuntimeConfigUpd
 			nextConfig.readyForReviewNotificationsEnabled !== current.readyForReviewNotificationsEnabled ||
 			nextConfig.commitPromptTemplate !== current.commitPromptTemplate ||
 			nextConfig.openPrPromptTemplate !== current.openPrPromptTemplate ||
+			nextConfig.testPromptTemplate !== current.testPromptTemplate ||
+			nextConfig.testFailurePromptTemplate !== current.testFailurePromptTemplate ||
 			!areRuntimeProjectShortcutsEqual(nextConfig.shortcuts, current.shortcuts);
 
 		if (!hasChanges) {
@@ -587,6 +663,8 @@ export async function updateRuntimeConfig(cwd: string, updates: RuntimeConfigUpd
 			readyForReviewNotificationsEnabled: nextConfig.readyForReviewNotificationsEnabled,
 			commitPromptTemplate: nextConfig.commitPromptTemplate,
 			openPrPromptTemplate: nextConfig.openPrPromptTemplate,
+			testPromptTemplate: nextConfig.testPromptTemplate,
+			testFailurePromptTemplate: nextConfig.testFailurePromptTemplate,
 		});
 		await writeRuntimeProjectConfigFile(projectConfigPath, {
 			shortcuts: nextConfig.shortcuts,
@@ -601,6 +679,8 @@ export async function updateRuntimeConfig(cwd: string, updates: RuntimeConfigUpd
 			shortcuts: nextConfig.shortcuts,
 			commitPromptTemplate: nextConfig.commitPromptTemplate,
 			openPrPromptTemplate: nextConfig.openPrPromptTemplate,
+			testPromptTemplate: nextConfig.testPromptTemplate,
+			testFailurePromptTemplate: nextConfig.testFailurePromptTemplate,
 		});
 	});
 }
@@ -630,6 +710,8 @@ export async function updateGlobalRuntimeConfig(
 				shortcuts: current.shortcuts,
 				commitPromptTemplate: updates.commitPromptTemplate ?? current.commitPromptTemplate,
 				openPrPromptTemplate: updates.openPrPromptTemplate ?? current.openPrPromptTemplate,
+				testPromptTemplate: updates.testPromptTemplate ?? current.testPromptTemplate,
+				testFailurePromptTemplate: updates.testFailurePromptTemplate ?? current.testFailurePromptTemplate,
 			};
 
 			const hasChanges =
@@ -638,7 +720,9 @@ export async function updateGlobalRuntimeConfig(
 				nextConfig.agentAutonomousModeEnabled !== current.agentAutonomousModeEnabled ||
 				nextConfig.readyForReviewNotificationsEnabled !== current.readyForReviewNotificationsEnabled ||
 				nextConfig.commitPromptTemplate !== current.commitPromptTemplate ||
-				nextConfig.openPrPromptTemplate !== current.openPrPromptTemplate;
+				nextConfig.openPrPromptTemplate !== current.openPrPromptTemplate ||
+				nextConfig.testPromptTemplate !== current.testPromptTemplate ||
+				nextConfig.testFailurePromptTemplate !== current.testFailurePromptTemplate;
 
 			if (!hasChanges) {
 				return current;
@@ -651,6 +735,8 @@ export async function updateGlobalRuntimeConfig(
 				readyForReviewNotificationsEnabled: nextConfig.readyForReviewNotificationsEnabled,
 				commitPromptTemplate: nextConfig.commitPromptTemplate,
 				openPrPromptTemplate: nextConfig.openPrPromptTemplate,
+				testPromptTemplate: nextConfig.testPromptTemplate,
+				testFailurePromptTemplate: nextConfig.testFailurePromptTemplate,
 			});
 
 			return createRuntimeConfigStateFromValues({
@@ -663,6 +749,8 @@ export async function updateGlobalRuntimeConfig(
 				shortcuts: nextConfig.shortcuts,
 				commitPromptTemplate: nextConfig.commitPromptTemplate,
 				openPrPromptTemplate: nextConfig.openPrPromptTemplate,
+				testPromptTemplate: nextConfig.testPromptTemplate,
+				testFailurePromptTemplate: nextConfig.testFailurePromptTemplate,
 			});
 		},
 	);

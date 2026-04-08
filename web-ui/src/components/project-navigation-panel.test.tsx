@@ -22,6 +22,7 @@ const PROJECTS: RuntimeProjectSummary[] = [
 		taskCounts: {
 			backlog: 0,
 			in_progress: 0,
+			test: 0,
 			review: 0,
 			trash: 0,
 		},

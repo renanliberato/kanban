@@ -3,8 +3,9 @@ import { describe, expect, it } from "vitest";
 import { getNextDetailTaskIdAfterTrashMove, isDetailViewColumnId } from "@/utils/detail-view-task-order";
 
 describe("isDetailViewColumnId", () => {
-	it("returns true only for in-progress and review columns", () => {
+	it("returns true only for in-progress, test, and review columns", () => {
 		expect(isDetailViewColumnId("in_progress")).toBe(true);
+		expect(isDetailViewColumnId("test")).toBe(true);
 		expect(isDetailViewColumnId("review")).toBe(true);
 		expect(isDetailViewColumnId("backlog")).toBe(false);
 		expect(isDetailViewColumnId("trash")).toBe(false);

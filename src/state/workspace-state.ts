@@ -34,6 +34,7 @@ const WORKSPACE_ID_COLLISION_SUFFIX_LENGTH = 4;
 const BOARD_COLUMNS: Array<{ id: RuntimeBoardColumnId; title: string }> = [
 	{ id: "backlog", title: "Backlog" },
 	{ id: "in_progress", title: "In Progress" },
+	{ id: "test", title: "Test" },
 	{ id: "review", title: "Review" },
 	{ id: "trash", title: "Trash" },
 ];
@@ -147,6 +148,37 @@ function createEmptyBoard(): RuntimeBoardData {
 			cards: [],
 		})),
 		dependencies: [],
+	};
+}
+
+function ensureBoardColumns(board: RuntimeBoardData): RuntimeBoardData {
+	const columnById = new Map(board.columns.map((column) => [column.id, column]));
+	let changed = board.columns.length !== BOARD_COLUMNS.length;
+	const columns = BOARD_COLUMNS.map((definition) => {
+		const existing = columnById.get(definition.id);
+		if (!existing) {
+			changed = true;
+			return {
+				id: definition.id,
+				title: definition.title,
+				cards: [],
+			};
+		}
+		if (existing.title !== definition.title) {
+			changed = true;
+			return {
+				...existing,
+				title: definition.title,
+			};
+		}
+		return existing;
+	});
+	if (!changed) {
+		return board;
+	}
+	return {
+		...board,
+		columns,
 	};
 }
 
@@ -296,7 +328,9 @@ async function readWorkspaceBoard(workspaceId: string): Promise<RuntimeBoardData
 	const boardPath = getWorkspaceBoardPath(workspaceId);
 	const rawBoard = await readJsonFile(boardPath);
 	return updateTaskDependencies(
-		parsePersistedStateFile(boardPath, BOARD_FILENAME, rawBoard, runtimeBoardDataSchema, createEmptyBoard()),
+		ensureBoardColumns(
+			parsePersistedStateFile(boardPath, BOARD_FILENAME, rawBoard, runtimeBoardDataSchema, createEmptyBoard()),
+		),
 	);
 }
 

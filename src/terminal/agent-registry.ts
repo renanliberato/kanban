@@ -122,7 +122,11 @@ export function buildRuntimeConfigResponse(
 		clineProviderSettings,
 		commitPromptTemplate: runtimeConfig.commitPromptTemplate,
 		openPrPromptTemplate: runtimeConfig.openPrPromptTemplate,
+		testPromptTemplate: runtimeConfig.testPromptTemplate,
+		testFailurePromptTemplate: runtimeConfig.testFailurePromptTemplate,
 		commitPromptTemplateDefault: runtimeConfig.commitPromptTemplateDefault,
 		openPrPromptTemplateDefault: runtimeConfig.openPrPromptTemplateDefault,
+		testPromptTemplateDefault: runtimeConfig.testPromptTemplateDefault,
+		testFailurePromptTemplateDefault: runtimeConfig.testFailurePromptTemplateDefault,
 	};
 }

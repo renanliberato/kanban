@@ -23,12 +23,14 @@ export interface SearchableTask {
 export function countTasksByColumn(board: BoardData): {
 	backlog: number;
 	in_progress: number;
+	test: number;
 	review: number;
 	trash: number;
 } {
 	const counts = {
 		backlog: 0,
 		in_progress: 0,
+		test: 0,
 		review: 0,
 		trash: 0,
 	};
@@ -39,6 +41,10 @@ export function countTasksByColumn(board: BoardData): {
 		}
 		if (column.id === "in_progress") {
 			counts.in_progress += column.cards.length;
+			continue;
+		}
+		if (column.id === "test") {
+			counts.test += column.cards.length;
 			continue;
 		}
 		if (column.id === "review") {

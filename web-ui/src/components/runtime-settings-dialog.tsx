@@ -308,6 +308,8 @@ export function RuntimeSettingsDialog({
 	const [shortcuts, setShortcuts] = useState<RuntimeProjectShortcut[]>([]);
 	const [commitPromptTemplate, setCommitPromptTemplate] = useState("");
 	const [openPrPromptTemplate, setOpenPrPromptTemplate] = useState("");
+	const [testPromptTemplate, setTestPromptTemplate] = useState("");
+	const [testFailurePromptTemplate, setTestFailurePromptTemplate] = useState("");
 	const [selectedPromptVariant, setSelectedPromptVariant] = useState<TaskGitAction>("commit");
 	const [copiedVariableToken, setCopiedVariableToken] = useState<string | null>(null);
 	const [saveError, setSaveError] = useState<string | null>(null);
@@ -318,6 +320,8 @@ export function RuntimeSettingsDialog({
 	const controlsDisabled = isLoading || isSaving || config === null;
 	const commitPromptTemplateDefault = config?.commitPromptTemplateDefault ?? "";
 	const openPrPromptTemplateDefault = config?.openPrPromptTemplateDefault ?? "";
+	const testPromptTemplateDefault = config?.testPromptTemplateDefault ?? "";
+	const testFailurePromptTemplateDefault = config?.testFailurePromptTemplateDefault ?? "";
 	const isCommitPromptAtDefault =
 		normalizeTemplateForComparison(commitPromptTemplate) ===
 		normalizeTemplateForComparison(commitPromptTemplateDefault);
@@ -371,6 +375,8 @@ export function RuntimeSettingsDialog({
 	const initialShortcuts = config?.shortcuts ?? [];
 	const initialCommitPromptTemplate = config?.commitPromptTemplate ?? "";
 	const initialOpenPrPromptTemplate = config?.openPrPromptTemplate ?? "";
+	const initialTestPromptTemplate = config?.testPromptTemplate ?? "";
+	const initialTestFailurePromptTemplate = config?.testFailurePromptTemplate ?? "";
 	const clineSettings = useRuntimeSettingsClineController({
 		open,
 		workspaceId,
@@ -414,9 +420,21 @@ export function RuntimeSettingsDialog({
 		) {
 			return true;
 		}
-		return (
+		if (
 			normalizeTemplateForComparison(openPrPromptTemplate) !==
 			normalizeTemplateForComparison(initialOpenPrPromptTemplate)
+		) {
+			return true;
+		}
+		if (
+			normalizeTemplateForComparison(testPromptTemplate) !==
+			normalizeTemplateForComparison(initialTestPromptTemplate)
+		) {
+			return true;
+		}
+		return (
+			normalizeTemplateForComparison(testFailurePromptTemplate) !==
+			normalizeTemplateForComparison(initialTestFailurePromptTemplate)
 		);
 	}, [
 		agentAutonomousModeEnabled,
@@ -431,11 +449,15 @@ export function RuntimeSettingsDialog({
 		initialReadyForReviewNotificationsEnabled,
 		initialSelectedAgentId,
 		initialShortcuts,
+		initialTestFailurePromptTemplate,
+		initialTestPromptTemplate,
 		initialThemeId,
 		openPrPromptTemplate,
 		readyForReviewNotificationsEnabled,
 		selectedAgentId,
 		shortcuts,
+		testFailurePromptTemplate,
+		testPromptTemplate,
 	]);
 
 	useEffect(() => {
@@ -448,6 +470,8 @@ export function RuntimeSettingsDialog({
 		setShortcuts(config?.shortcuts ?? []);
 		setCommitPromptTemplate(config?.commitPromptTemplate ?? "");
 		setOpenPrPromptTemplate(config?.openPrPromptTemplate ?? "");
+		setTestPromptTemplate(config?.testPromptTemplate ?? "");
+		setTestFailurePromptTemplate(config?.testFailurePromptTemplate ?? "");
 		setSaveError(null);
 	}, [
 		config?.agentAutonomousModeEnabled,
@@ -456,6 +480,8 @@ export function RuntimeSettingsDialog({
 		config?.readyForReviewNotificationsEnabled,
 		config?.selectedAgentId,
 		config?.shortcuts,
+		config?.testFailurePromptTemplate,
+		config?.testPromptTemplate,
 		fallbackAgentId,
 		open,
 	]);
@@ -586,6 +612,8 @@ export function RuntimeSettingsDialog({
 			shortcuts,
 			commitPromptTemplate,
 			openPrPromptTemplate,
+			testPromptTemplate,
+			testFailurePromptTemplate,
 		});
 		if (!saved) {
 			setSaveError("Could not save runtime settings. Check runtime logs and try again.");
@@ -750,6 +778,61 @@ export function RuntimeSettingsDialog({
 						disabled={controlsDisabled}
 					/>{" "}
 					to reference {TASK_GIT_BASE_REF_PROMPT_VARIABLE.description}
+				</p>
+
+				<h6 className="font-semibold text-text-primary mt-4 mb-1">Test automation prompts</h6>
+				<p className="text-text-secondary text-[13px] mt-0 mb-2">
+					These prompts drive the Test column workflow between In Progress and Review.
+				</p>
+				<div className="flex items-center justify-between gap-2 mb-1">
+					<span className="text-[12px] text-text-secondary">Test prompt</span>
+					<Button
+						variant="ghost"
+						size="sm"
+						onClick={() => setTestPromptTemplate(testPromptTemplateDefault)}
+						disabled={
+							controlsDisabled ||
+							normalizeTemplateForComparison(testPromptTemplate) ===
+								normalizeTemplateForComparison(testPromptTemplateDefault)
+						}
+					>
+						Reset
+					</Button>
+				</div>
+				<textarea
+					rows={5}
+					value={testPromptTemplate}
+					onChange={(event) => setTestPromptTemplate(event.target.value)}
+					placeholder="Prompt used when a task enters the Test column."
+					disabled={controlsDisabled}
+					className="w-full rounded-md border border-border bg-surface-2 p-3 text-[13px] text-text-primary font-mono placeholder:text-text-tertiary focus:border-border-focus focus:outline-none resize-none disabled:opacity-40"
+				/>
+
+				<div className="flex items-center justify-between gap-2 mt-3 mb-1">
+					<span className="text-[12px] text-text-secondary">Failure follow-up prompt</span>
+					<Button
+						variant="ghost"
+						size="sm"
+						onClick={() => setTestFailurePromptTemplate(testFailurePromptTemplateDefault)}
+						disabled={
+							controlsDisabled ||
+							normalizeTemplateForComparison(testFailurePromptTemplate) ===
+								normalizeTemplateForComparison(testFailurePromptTemplateDefault)
+						}
+					>
+						Reset
+					</Button>
+				</div>
+				<textarea
+					rows={5}
+					value={testFailurePromptTemplate}
+					onChange={(event) => setTestFailurePromptTemplate(event.target.value)}
+					placeholder="Prompt sent when Test detects a failure signal."
+					disabled={controlsDisabled}
+					className="w-full rounded-md border border-border bg-surface-2 p-3 text-[13px] text-text-primary font-mono placeholder:text-text-tertiary focus:border-border-focus focus:outline-none resize-none disabled:opacity-40"
+				/>
+				<p className="text-text-secondary text-[12px] mt-1 mb-0">
+					Failure signal checked from final assistant message: <span className="font-mono">TEST FAILED</span>
 				</p>
 				<h6 className="font-semibold text-text-primary mt-4 mb-2">Notifications</h6>
 				<div className="flex items-center gap-2">
