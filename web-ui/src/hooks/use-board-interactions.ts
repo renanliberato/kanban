@@ -45,11 +45,13 @@ interface PendingProgrammaticStartMoveCompletion {
 	timeoutId: number;
 }
 
+const TEST_AUTOMATION_LOG_PREFIX = "[kanban][test-automation]";
 const TEST_FAILED_SIGNAL = "TEST FAILED";
+const TEST_PASSED_SIGNAL = "TEST PASSED";
 const DEFAULT_TEST_PROMPT = `Run the relevant tests now.
 
 If any test fails, include "${TEST_FAILED_SIGNAL}" in your final message.
-If tests pass, include "TEST PASSED" in your final message.`;
+If tests pass, include "${TEST_PASSED_SIGNAL}" in your final message.`;
 const DEFAULT_TEST_FAILURE_PROMPT =
 	"Tests failed. Investigate the failing test output, fix the issue, and complete the task so it can be tested again.";
 
@@ -66,6 +68,19 @@ function resolveTestFailurePromptTemplate(template: string): string {
 function hasTestFailureSignal(summary: RuntimeTaskSessionSummary): boolean {
 	const finalMessage = summary.latestHookActivity?.finalMessage?.trim() ?? "";
 	return finalMessage.toUpperCase().includes(TEST_FAILED_SIGNAL);
+}
+
+function hasTestPassedSignal(summary: RuntimeTaskSessionSummary): boolean {
+	const finalMessage = summary.latestHookActivity?.finalMessage?.trim() ?? "";
+	return finalMessage.toUpperCase().includes(TEST_PASSED_SIGNAL);
+}
+
+function logTestAutomation(taskId: string, message: string, details?: Record<string, unknown>): void {
+	if (details) {
+		console.info(`${TEST_AUTOMATION_LOG_PREFIX} [${taskId}] ${message}`, details);
+		return;
+	}
+	console.info(`${TEST_AUTOMATION_LOG_PREFIX} [${taskId}] ${message}`);
 }
 
 interface UseBoardInteractionsInput {
@@ -142,12 +157,15 @@ export function useBoardInteractions({
 	runAutoReviewGitAction,
 }: UseBoardInteractionsInput): UseBoardInteractionsResult {
 	const previousSessionsRef = useRef<Record<string, RuntimeTaskSessionSummary>>({});
+	const hasInitializedBoardInteractionsRef = useRef(false);
 	const notificationPermissionPromptInFlightRef = useRef(false);
 	const moveToTrashLoadingByIdRef = useRef<Record<string, true>>({});
 	const pendingProgrammaticStartMoveCompletionByTaskIdRef = useRef<
 		Record<string, PendingProgrammaticStartMoveCompletion>
 	>({});
+	const enteredTestSessionVersionByTaskIdRef = useRef<Record<string, number>>({});
 	const processedTestPromptSessionVersionByTaskIdRef = useRef<Record<string, number>>({});
+	const handledTestFailureSessionVersionByTaskIdRef = useRef<Record<string, number>>({});
 	const processedTestFailurePromptSessionVersionByTaskIdRef = useRef<Record<string, number>>({});
 	const [moveToTrashLoadingById, setMoveToTrashLoadingById] = useState<Record<string, boolean>>({});
 	const {
@@ -458,163 +476,304 @@ export function useBoardInteractions({
 		],
 	);
 
+	const sendAutomatedTaskPrompt = useCallback(
+		async (taskId: string, prompt: string, reason: "test" | "test_failure"): Promise<boolean> => {
+			logTestAutomation(taskId, `sending ${reason} prompt`, {
+				promptPreview: prompt.slice(0, 120),
+			});
+			const pasted = await sendTaskSessionInput(taskId, prompt, {
+				appendNewline: false,
+				mode: "paste",
+			});
+			if (!pasted.ok) {
+				logTestAutomation(taskId, `failed to paste ${reason} prompt`, {
+					message: pasted.message ?? null,
+				});
+				return false;
+			}
+			await new Promise<void>((resolve) => {
+				window.setTimeout(resolve, 150);
+			});
+			const submitted = await sendTaskSessionInput(taskId, "\r", { appendNewline: false });
+			if (!submitted.ok) {
+				logTestAutomation(taskId, `failed to submit ${reason} prompt`, {
+					message: submitted.message ?? null,
+				});
+				return false;
+			}
+			logTestAutomation(taskId, `${reason} prompt submitted`);
+			return true;
+		},
+		[sendTaskSessionInput],
+	);
+
 	useEffect(() => {
 		const queuedTestPrompts: Array<{ taskId: string; updatedAt: number }> = [];
 		const queuedTestFailurePrompts: Array<{ taskId: string; updatedAt: number }> = [];
-		setBoard((currentBoard) => {
-			let nextBoard = currentBoard;
-			const previousSessions = previousSessionsRef.current;
-			const blockedInterruptedTaskIds = new Set<string>();
-			for (const summary of Object.values(sessions)) {
-				const previous = previousSessions[summary.taskId];
-				if (previous && previous.updatedAt > summary.updatedAt) {
-					continue;
-				}
-				const columnId = getTaskColumnId(nextBoard, summary.taskId);
-				if (summary.state === "awaiting_review" && columnId === "in_progress") {
-					const programmaticMoveAttempt = tryProgrammaticCardMove(summary.taskId, columnId, "test");
-					if (programmaticMoveAttempt === "started" || programmaticMoveAttempt === "blocked") {
-						queuedTestPrompts.push({
-							taskId: summary.taskId,
-							updatedAt: summary.updatedAt,
-						});
-						continue;
-					}
-					const moved = moveTaskToColumn(nextBoard, summary.taskId, "test", { insertAtTop: true });
-					if (moved.moved) {
-						nextBoard = moved.board;
-						queuedTestPrompts.push({
+		let nextBoard = board;
+		let boardChanged = false;
+		const previousSessions = previousSessionsRef.current;
+		const blockedInterruptedTaskIds = new Set<string>();
+		for (const summary of Object.values(sessions)) {
+			const previous = previousSessions[summary.taskId];
+			if (previous && previous.updatedAt > summary.updatedAt) {
+				continue;
+			}
+			const columnId = getTaskColumnId(nextBoard, summary.taskId);
+			if (summary.state === "awaiting_review" && columnId === "in_progress") {
+				const latestHandledFailureSessionVersion =
+					handledTestFailureSessionVersionByTaskIdRef.current[summary.taskId];
+				if (
+					typeof latestHandledFailureSessionVersion === "number" &&
+					summary.updatedAt <= latestHandledFailureSessionVersion
+				) {
+					if (processedTestFailurePromptSessionVersionByTaskIdRef.current[summary.taskId] !== summary.updatedAt) {
+						queuedTestFailurePrompts.push({
 							taskId: summary.taskId,
 							updatedAt: summary.updatedAt,
 						});
 					}
+					logTestAutomation(summary.taskId, "ignoring stale completion after handled test failure", {
+						summaryUpdatedAt: summary.updatedAt,
+						latestHandledFailureSessionVersion,
+					});
 					continue;
 				}
-				if (summary.state === "awaiting_review" && columnId === "test") {
-					if (hasTestFailureSignal(summary)) {
-						const programmaticMoveAttempt = tryProgrammaticCardMove(summary.taskId, columnId, "in_progress", {
-							skipKickoff: true,
-						});
-						if (programmaticMoveAttempt === "started" || programmaticMoveAttempt === "blocked") {
-							queuedTestFailurePrompts.push({
-								taskId: summary.taskId,
-								updatedAt: summary.updatedAt,
-							});
-							continue;
-						}
-						const moved = moveTaskToColumn(nextBoard, summary.taskId, "in_progress", { insertAtTop: true });
-						if (moved.moved) {
-							nextBoard = moved.board;
-							queuedTestFailurePrompts.push({
-								taskId: summary.taskId,
-								updatedAt: summary.updatedAt,
-							});
-						}
-						continue;
-					}
-					const programmaticMoveAttempt = tryProgrammaticCardMove(summary.taskId, columnId, "review");
-					if (programmaticMoveAttempt === "started" || programmaticMoveAttempt === "blocked") {
-						continue;
-					}
-					const moved = moveTaskToColumn(nextBoard, summary.taskId, "review", { insertAtTop: true });
-					if (moved.moved) {
-						nextBoard = moved.board;
-					}
+				enteredTestSessionVersionByTaskIdRef.current[summary.taskId] = summary.updatedAt;
+				const programmaticMoveAttempt = tryProgrammaticCardMove(summary.taskId, columnId, "test");
+				if (programmaticMoveAttempt === "started" || programmaticMoveAttempt === "blocked") {
+					logTestAutomation(summary.taskId, "moving task into Test via programmatic card move", {
+						summaryUpdatedAt: summary.updatedAt,
+						programmaticMoveAttempt,
+					});
 					continue;
 				}
-				if (summary.state === "running" && columnId === "review") {
+				const moved = moveTaskToColumn(nextBoard, summary.taskId, "test", { insertAtTop: true });
+				if (moved.moved) {
+					nextBoard = moved.board;
+					boardChanged = true;
+					logTestAutomation(summary.taskId, "moved task into Test", {
+						summaryUpdatedAt: summary.updatedAt,
+					});
+				}
+				continue;
+			}
+			if (summary.state === "awaiting_review" && columnId === "test") {
+				let enteredTestSessionVersion = enteredTestSessionVersionByTaskIdRef.current[summary.taskId];
+				if (typeof enteredTestSessionVersion !== "number") {
+					enteredTestSessionVersion = summary.updatedAt;
+					enteredTestSessionVersionByTaskIdRef.current[summary.taskId] = enteredTestSessionVersion;
+					logTestAutomation(summary.taskId, "recovered missing Test entry version", {
+						summaryUpdatedAt: summary.updatedAt,
+					});
+				}
+				if (processedTestPromptSessionVersionByTaskIdRef.current[summary.taskId] !== enteredTestSessionVersion) {
+					queuedTestPrompts.push({
+						taskId: summary.taskId,
+						updatedAt: enteredTestSessionVersion,
+					});
+				}
+				if (summary.updatedAt <= enteredTestSessionVersion) {
+					// Do not evaluate pass/fail on the same completion event that just moved the task into Test.
+					logTestAutomation(summary.taskId, "waiting for a post-Test completion event", {
+						summaryUpdatedAt: summary.updatedAt,
+						enteredTestSessionVersion,
+						finalMessage: summary.latestHookActivity?.finalMessage ?? null,
+					});
+					continue;
+				}
+				const hasTestFailedSignal = hasTestFailureSignal(summary);
+				const hasTestPassedSignalValue = hasTestPassedSignal(summary);
+				logTestAutomation(summary.taskId, "evaluating Test completion for Review move", {
+					summaryUpdatedAt: summary.updatedAt,
+					finalMessage: summary.latestHookActivity?.finalMessage ?? null,
+					hasTestPassedSignal: hasTestPassedSignalValue,
+					hasTestFailedSignal,
+				});
+				if (hasTestFailedSignal) {
+					handledTestFailureSessionVersionByTaskIdRef.current[summary.taskId] = summary.updatedAt;
 					const programmaticMoveAttempt = tryProgrammaticCardMove(summary.taskId, columnId, "in_progress", {
 						skipKickoff: true,
 					});
 					if (programmaticMoveAttempt === "started" || programmaticMoveAttempt === "blocked") {
+						logTestAutomation(summary.taskId, "routing failed test back to In Progress via programmatic move", {
+							summaryUpdatedAt: summary.updatedAt,
+							finalMessage: summary.latestHookActivity?.finalMessage ?? null,
+							programmaticMoveAttempt,
+						});
 						continue;
 					}
 					const moved = moveTaskToColumn(nextBoard, summary.taskId, "in_progress", { insertAtTop: true });
 					if (moved.moved) {
 						nextBoard = moved.board;
+						boardChanged = true;
+						logTestAutomation(summary.taskId, "routed failed test back to In Progress", {
+							summaryUpdatedAt: summary.updatedAt,
+							finalMessage: summary.latestHookActivity?.finalMessage ?? null,
+						});
 					}
 					continue;
 				}
-				if (
-					summary.state === "interrupted" &&
-					previous?.state !== "interrupted" &&
-					columnId &&
-					columnId !== "trash"
-				) {
-					const nextTaskId = getNextDetailTaskIdAfterTrashMove(nextBoard, summary.taskId);
-					const programmaticMoveAttempt = tryProgrammaticCardMove(summary.taskId, columnId, "trash", {
-						skipTrashWorkflow: true,
+				if (!hasTestPassedSignalValue) {
+					logTestAutomation(summary.taskId, "waiting for explicit test result signal", {
+						summaryUpdatedAt: summary.updatedAt,
+						finalMessage: summary.latestHookActivity?.finalMessage ?? null,
 					});
-					if (programmaticMoveAttempt === "started" || programmaticMoveAttempt === "blocked") {
-						if (programmaticMoveAttempt === "blocked") {
-							blockedInterruptedTaskIds.add(summary.taskId);
-						}
-						setSelectedTaskId((currentSelectedTaskId) =>
-							currentSelectedTaskId === summary.taskId ? nextTaskId : currentSelectedTaskId,
-						);
-						continue;
-					}
-					const moved = moveTaskToColumn(nextBoard, summary.taskId, "trash", { insertAtTop: true });
-					if (moved.moved) {
-						setSelectedTaskId((currentSelectedTaskId) =>
-							currentSelectedTaskId === summary.taskId ? nextTaskId : currentSelectedTaskId,
-						);
-						nextBoard = moved.board;
-					}
-				}
-			}
-			const nextPreviousSessions = { ...sessions };
-			for (const taskId of blockedInterruptedTaskIds) {
-				const previousSession = previousSessions[taskId];
-				if (previousSession) {
-					nextPreviousSessions[taskId] = previousSession;
 					continue;
 				}
-				delete nextPreviousSessions[taskId];
+				const programmaticMoveAttempt = tryProgrammaticCardMove(summary.taskId, columnId, "review");
+				if (programmaticMoveAttempt === "started" || programmaticMoveAttempt === "blocked") {
+					logTestAutomation(summary.taskId, "moving task from Test to Review via programmatic move", {
+						summaryUpdatedAt: summary.updatedAt,
+						programmaticMoveAttempt,
+					});
+					continue;
+				}
+				const moved = moveTaskToColumn(nextBoard, summary.taskId, "review", { insertAtTop: true });
+				if (moved.moved) {
+					nextBoard = moved.board;
+					boardChanged = true;
+					logTestAutomation(summary.taskId, "moved task from Test to Review", {
+						summaryUpdatedAt: summary.updatedAt,
+						finalMessage: summary.latestHookActivity?.finalMessage ?? null,
+					});
+				}
+				continue;
 			}
-			previousSessionsRef.current = nextPreviousSessions;
-			return nextBoard;
-		});
+			if (summary.state === "running" && columnId === "review") {
+				const programmaticMoveAttempt = tryProgrammaticCardMove(summary.taskId, columnId, "in_progress", {
+					skipKickoff: true,
+				});
+				if (programmaticMoveAttempt === "started" || programmaticMoveAttempt === "blocked") {
+					continue;
+				}
+				const moved = moveTaskToColumn(nextBoard, summary.taskId, "in_progress", { insertAtTop: true });
+				if (moved.moved) {
+					nextBoard = moved.board;
+					boardChanged = true;
+				}
+				continue;
+			}
+			if (summary.state === "interrupted" && previous?.state !== "interrupted" && columnId && columnId !== "trash") {
+				const nextTaskId = getNextDetailTaskIdAfterTrashMove(nextBoard, summary.taskId);
+				const programmaticMoveAttempt = tryProgrammaticCardMove(summary.taskId, columnId, "trash", {
+					skipTrashWorkflow: true,
+				});
+				if (programmaticMoveAttempt === "started" || programmaticMoveAttempt === "blocked") {
+					if (programmaticMoveAttempt === "blocked") {
+						blockedInterruptedTaskIds.add(summary.taskId);
+					}
+					setSelectedTaskId((currentSelectedTaskId) =>
+						currentSelectedTaskId === summary.taskId ? nextTaskId : currentSelectedTaskId,
+					);
+					continue;
+				}
+				const moved = moveTaskToColumn(nextBoard, summary.taskId, "trash", { insertAtTop: true });
+				if (moved.moved) {
+					setSelectedTaskId((currentSelectedTaskId) =>
+						currentSelectedTaskId === summary.taskId ? nextTaskId : currentSelectedTaskId,
+					);
+					nextBoard = moved.board;
+					boardChanged = true;
+				}
+			}
+		}
+		const nextPreviousSessions = { ...sessions };
+		for (const taskId of blockedInterruptedTaskIds) {
+			const previousSession = previousSessions[taskId];
+			if (previousSession) {
+				nextPreviousSessions[taskId] = previousSession;
+				continue;
+			}
+			delete nextPreviousSessions[taskId];
+		}
+		previousSessionsRef.current = nextPreviousSessions;
+		if (boardChanged) {
+			setBoard(nextBoard);
+		}
 		const resolvedTestPromptTemplate = resolveTestPromptTemplate(testPromptTemplate);
 		for (const queued of queuedTestPrompts) {
 			if (processedTestPromptSessionVersionByTaskIdRef.current[queued.taskId] === queued.updatedAt) {
+				logTestAutomation(queued.taskId, "skipping duplicate queued test prompt", {
+					summaryUpdatedAt: queued.updatedAt,
+				});
 				continue;
 			}
 			processedTestPromptSessionVersionByTaskIdRef.current[queued.taskId] = queued.updatedAt;
-			void sendTaskSessionInput(queued.taskId, resolvedTestPromptTemplate, { mode: "paste" }).then((result) => {
-				if (result.ok) {
-					return;
+			void (async () => {
+				let lastMessage: string | undefined;
+				for (let attempt = 0; attempt < 3; attempt += 1) {
+					logTestAutomation(queued.taskId, "test prompt attempt", {
+						attempt: attempt + 1,
+						summaryUpdatedAt: queued.updatedAt,
+					});
+					const result = await sendAutomatedTaskPrompt(queued.taskId, resolvedTestPromptTemplate, "test");
+					if (result) {
+						return;
+					}
+					lastMessage = "Could not run task test prompt.";
+					if (attempt < 2) {
+						await new Promise<void>((resolve) => {
+							window.setTimeout(resolve, 350);
+						});
+					}
+				}
+				if (processedTestPromptSessionVersionByTaskIdRef.current[queued.taskId] === queued.updatedAt) {
+					delete processedTestPromptSessionVersionByTaskIdRef.current[queued.taskId];
 				}
 				showAppToast({
 					intent: "danger",
 					icon: "warning-sign",
-					message: result.message ?? "Could not run task test prompt.",
+					message: lastMessage ?? "Could not run task test prompt.",
 					timeout: 7000,
 				});
-			});
+			})();
 		}
 
 		const resolvedTestFailurePromptTemplate = resolveTestFailurePromptTemplate(testFailurePromptTemplate);
 		for (const queued of queuedTestFailurePrompts) {
 			if (processedTestFailurePromptSessionVersionByTaskIdRef.current[queued.taskId] === queued.updatedAt) {
+				logTestAutomation(queued.taskId, "skipping duplicate queued test-failure prompt", {
+					summaryUpdatedAt: queued.updatedAt,
+				});
 				continue;
 			}
 			processedTestFailurePromptSessionVersionByTaskIdRef.current[queued.taskId] = queued.updatedAt;
-			void sendTaskSessionInput(queued.taskId, resolvedTestFailurePromptTemplate, { mode: "paste" }).then(
-				(result) => {
-					if (result.ok) {
+			void (async () => {
+				let lastMessage: string | undefined;
+				for (let attempt = 0; attempt < 3; attempt += 1) {
+					logTestAutomation(queued.taskId, "test-failure prompt attempt", {
+						attempt: attempt + 1,
+						summaryUpdatedAt: queued.updatedAt,
+					});
+					const result = await sendAutomatedTaskPrompt(
+						queued.taskId,
+						resolvedTestFailurePromptTemplate,
+						"test_failure",
+					);
+					if (result) {
 						return;
 					}
-					showAppToast({
-						intent: "danger",
-						icon: "warning-sign",
-						message: result.message ?? "Could not send test-failure follow-up prompt.",
-						timeout: 7000,
-					});
-				},
-			);
+					lastMessage = "Could not send test-failure follow-up prompt.";
+					if (attempt < 2) {
+						await new Promise<void>((resolve) => {
+							window.setTimeout(resolve, 350);
+						});
+					}
+				}
+				if (processedTestFailurePromptSessionVersionByTaskIdRef.current[queued.taskId] === queued.updatedAt) {
+					delete processedTestFailurePromptSessionVersionByTaskIdRef.current[queued.taskId];
+				}
+				showAppToast({
+					intent: "danger",
+					icon: "warning-sign",
+					message: lastMessage ?? "Could not send test-failure follow-up prompt.",
+					timeout: 7000,
+				});
+			})();
 		}
 	}, [
+		board,
 		programmaticCardMoveCycle,
 		sessions,
 		sendTaskSessionInput,
@@ -985,7 +1144,9 @@ export function useBoardInteractions({
 	const resetBoardInteractionsState = useCallback(() => {
 		previousSessionsRef.current = {};
 		moveToTrashLoadingByIdRef.current = {};
+		enteredTestSessionVersionByTaskIdRef.current = {};
 		processedTestPromptSessionVersionByTaskIdRef.current = {};
+		handledTestFailureSessionVersionByTaskIdRef.current = {};
 		processedTestFailurePromptSessionVersionByTaskIdRef.current = {};
 		setMoveToTrashLoadingById({});
 		for (const taskId of Object.keys(pendingProgrammaticStartMoveCompletionByTaskIdRef.current)) {
@@ -996,6 +1157,10 @@ export function useBoardInteractions({
 	}, [resetProgrammaticCardMoves, resolvePendingProgrammaticStartMove, setIsClearTrashDialogOpen]);
 
 	useEffect(() => {
+		if (!hasInitializedBoardInteractionsRef.current) {
+			hasInitializedBoardInteractionsRef.current = true;
+			return;
+		}
 		resetBoardInteractionsState();
 	}, [currentProjectId, resetBoardInteractionsState]);
 
