@@ -124,9 +124,13 @@ export function buildRuntimeConfigResponse(
 		openPrPromptTemplate: runtimeConfig.openPrPromptTemplate,
 		testPromptTemplate: runtimeConfig.testPromptTemplate,
 		testFailurePromptTemplate: runtimeConfig.testFailurePromptTemplate,
+		codeReviewPromptTemplate: runtimeConfig.codeReviewPromptTemplate,
+		codeReviewFailurePromptTemplate: runtimeConfig.codeReviewFailurePromptTemplate,
 		commitPromptTemplateDefault: runtimeConfig.commitPromptTemplateDefault,
 		openPrPromptTemplateDefault: runtimeConfig.openPrPromptTemplateDefault,
 		testPromptTemplateDefault: runtimeConfig.testPromptTemplateDefault,
 		testFailurePromptTemplateDefault: runtimeConfig.testFailurePromptTemplateDefault,
+		codeReviewPromptTemplateDefault: runtimeConfig.codeReviewPromptTemplateDefault,
+		codeReviewFailurePromptTemplateDefault: runtimeConfig.codeReviewFailurePromptTemplateDefault,
 	};
 }

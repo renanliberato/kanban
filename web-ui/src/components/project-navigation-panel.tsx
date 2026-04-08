@@ -83,6 +83,7 @@ export function ProjectNavigationPanel({
 		? pendingProjectRemoval.taskCounts.backlog +
 			pendingProjectRemoval.taskCounts.in_progress +
 			pendingProjectRemoval.taskCounts.test +
+			pendingProjectRemoval.taskCounts.code_review +
 			pendingProjectRemoval.taskCounts.review +
 			pendingProjectRemoval.taskCounts.trash
 		: 0;
@@ -580,6 +581,13 @@ function ProjectRow({
 			shortLabel: "TS",
 			toneClassName: "bg-status-orange/20 text-status-orange",
 			count: project.taskCounts.test,
+		},
+		{
+			id: "code_review",
+			title: "Code Review",
+			shortLabel: "CR",
+			toneClassName: "bg-status-blue/20 text-status-blue",
+			count: project.taskCounts.code_review,
 		},
 		{
 			id: "review",

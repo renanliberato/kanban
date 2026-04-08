@@ -19,6 +19,8 @@ export interface UseRuntimeConfigResult {
 		openPrPromptTemplate?: string;
 		testPromptTemplate?: string;
 		testFailurePromptTemplate?: string;
+		codeReviewPromptTemplate?: string;
+		codeReviewFailurePromptTemplate?: string;
 	}) => Promise<RuntimeConfigResponse | null>;
 }
 
@@ -88,6 +90,8 @@ export function useRuntimeConfig(
 			openPrPromptTemplate?: string;
 			testPromptTemplate?: string;
 			testFailurePromptTemplate?: string;
+			codeReviewPromptTemplate?: string;
+			codeReviewFailurePromptTemplate?: string;
 		}): Promise<RuntimeConfigResponse | null> => {
 			setIsSaving(true);
 			try {

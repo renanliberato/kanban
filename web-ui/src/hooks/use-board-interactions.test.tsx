@@ -52,6 +52,8 @@ function createBoard(): BoardData {
 				cards: [createTask("task-1", "Backlog task", 1)],
 			},
 			{ id: "in_progress", title: "In Progress", cards: [] },
+			{ id: "test", title: "Test", cards: [] },
+			{ id: "code_review", title: "Code Review", cards: [] },
 			{ id: "review", title: "Review", cards: [] },
 			{ id: "trash", title: "Trash", cards: [] },
 		],
@@ -129,6 +131,8 @@ function HookHarness({
 		readyForReviewNotificationsEnabled: false,
 		testPromptTemplate: "",
 		testFailurePromptTemplate: "",
+		codeReviewPromptTemplate: "",
+		codeReviewFailurePromptTemplate: "",
 		taskGitActionLoadingByTaskId: {},
 		runAutoReviewGitAction: NOOP_RUN_AUTO_REVIEW,
 	});
@@ -150,6 +154,8 @@ function SessionTransitionHarness({
 	sendTaskSessionInput,
 	testPromptTemplate,
 	testFailurePromptTemplate,
+	codeReviewPromptTemplate,
+	codeReviewFailurePromptTemplate,
 	onSnapshot,
 }: {
 	initialBoard: BoardData;
@@ -161,6 +167,8 @@ function SessionTransitionHarness({
 	) => Promise<{ ok: boolean; message?: string }>;
 	testPromptTemplate: string;
 	testFailurePromptTemplate: string;
+	codeReviewPromptTemplate?: string;
+	codeReviewFailurePromptTemplate?: string;
 	onSnapshot: (snapshot: HookSnapshot) => void;
 }): null {
 	const [board, setBoard] = useState<BoardData>(initialBoard);
@@ -189,6 +197,8 @@ function SessionTransitionHarness({
 		readyForReviewNotificationsEnabled: false,
 		testPromptTemplate,
 		testFailurePromptTemplate,
+		codeReviewPromptTemplate: codeReviewPromptTemplate ?? "",
+		codeReviewFailurePromptTemplate: codeReviewFailurePromptTemplate ?? "",
 		taskGitActionLoadingByTaskId: {},
 		runAutoReviewGitAction: NOOP_RUN_AUTO_REVIEW,
 	});
@@ -349,6 +359,7 @@ describe("useBoardInteractions", () => {
 				{ id: "backlog", title: "Backlog", cards: [] },
 				{ id: "in_progress", title: "In Progress", cards: [task] },
 				{ id: "test", title: "Test", cards: [] },
+				{ id: "code_review", title: "Code Review", cards: [] },
 				{ id: "review", title: "Review", cards: [] },
 				{ id: "trash", title: "Trash", cards: [] },
 			],
@@ -388,6 +399,8 @@ describe("useBoardInteractions", () => {
 					sendTaskSessionInput={sendTaskSessionInput}
 					testPromptTemplate="run tests"
 					testFailurePromptTemplate="fix tests"
+					codeReviewPromptTemplate="run review"
+					codeReviewFailurePromptTemplate="fix review"
 					onSnapshot={(snapshot) => {
 						latestSnapshot = snapshot;
 					}}
@@ -438,6 +451,7 @@ describe("useBoardInteractions", () => {
 				{ id: "backlog", title: "Backlog", cards: [] },
 				{ id: "in_progress", title: "In Progress", cards: [] },
 				{ id: "test", title: "Test", cards: [task] },
+				{ id: "code_review", title: "Code Review", cards: [] },
 				{ id: "review", title: "Review", cards: [] },
 				{ id: "trash", title: "Trash", cards: [] },
 			],
@@ -477,6 +491,8 @@ describe("useBoardInteractions", () => {
 					sendTaskSessionInput={sendTaskSessionInput}
 					testPromptTemplate="run tests"
 					testFailurePromptTemplate="fix failing test"
+					codeReviewPromptTemplate="run review"
+					codeReviewFailurePromptTemplate="fix review"
 					onSnapshot={(snapshot) => {
 						latestSnapshot = snapshot;
 					}}
@@ -518,6 +534,7 @@ describe("useBoardInteractions", () => {
 				{ id: "backlog", title: "Backlog", cards: [] },
 				{ id: "in_progress", title: "In Progress", cards: [] },
 				{ id: "test", title: "Test", cards: [task] },
+				{ id: "code_review", title: "Code Review", cards: [] },
 				{ id: "review", title: "Review", cards: [] },
 				{ id: "trash", title: "Trash", cards: [] },
 			],
@@ -557,6 +574,8 @@ describe("useBoardInteractions", () => {
 					sendTaskSessionInput={sendTaskSessionInput}
 					testPromptTemplate="run tests"
 					testFailurePromptTemplate="fix failing test"
+					codeReviewPromptTemplate="run review"
+					codeReviewFailurePromptTemplate="fix review"
 					onSnapshot={(snapshot) => {
 						latestBoard = snapshot.board ?? null;
 						latestSetSessions = snapshot.setSessions ?? null;
@@ -603,7 +622,7 @@ describe("useBoardInteractions", () => {
 		expect(boardAfterUpdate.columns.find((column) => column.id === "review")?.cards[0]?.id).toBeUndefined();
 	});
 
-	it("moves tasks from Test to Review only when the test pass signal appears", async () => {
+	it("moves tasks from Test to Code Review and sends the code review prompt when tests pass", async () => {
 		let latestBoard: BoardData | null = null;
 		let latestSetSessions: Dispatch<SetStateAction<Record<string, RuntimeTaskSessionSummary>>> | null = null;
 		const sendTaskSessionInput = vi.fn(async () => ({ ok: true as const }));
@@ -632,6 +651,7 @@ describe("useBoardInteractions", () => {
 				{ id: "backlog", title: "Backlog", cards: [] },
 				{ id: "in_progress", title: "In Progress", cards: [] },
 				{ id: "test", title: "Test", cards: [task] },
+				{ id: "code_review", title: "Code Review", cards: [] },
 				{ id: "review", title: "Review", cards: [] },
 				{ id: "trash", title: "Trash", cards: [] },
 			],
@@ -671,6 +691,8 @@ describe("useBoardInteractions", () => {
 					sendTaskSessionInput={sendTaskSessionInput}
 					testPromptTemplate="run tests"
 					testFailurePromptTemplate="fix failing test"
+					codeReviewPromptTemplate="run review"
+					codeReviewFailurePromptTemplate="fix review"
 					onSnapshot={(snapshot) => {
 						latestBoard = snapshot.board ?? null;
 						latestSetSessions = snapshot.setSessions ?? null;
@@ -713,8 +735,255 @@ describe("useBoardInteractions", () => {
 		if (!boardAfterUpdate) {
 			throw new Error("Expected latest board snapshot.");
 		}
-		expect(boardAfterUpdate.columns.find((column) => column.id === "review")?.cards[0]?.id).toBe("task-1");
+		expect(boardAfterUpdate.columns.find((column) => column.id === "code_review")?.cards[0]?.id).toBe("task-1");
 		expect(boardAfterUpdate.columns.find((column) => column.id === "test")?.cards[0]?.id).toBeUndefined();
+		await act(async () => {
+			vi.advanceTimersByTime(200);
+			await Promise.resolve();
+		});
+		expect(sendTaskSessionInput).toHaveBeenCalledWith("task-1", "run review", {
+			appendNewline: false,
+			mode: "paste",
+		});
+		expect(sendTaskSessionInput).toHaveBeenCalledWith("task-1", "\r", {
+			appendNewline: false,
+		});
+	});
+
+	it("moves tasks from Code Review to Review only when the code review pass signal appears", async () => {
+		let latestBoard: BoardData | null = null;
+		let latestSetSessions: Dispatch<SetStateAction<Record<string, RuntimeTaskSessionSummary>>> | null = null;
+		const sendTaskSessionInput = vi.fn(async () => ({ ok: true as const }));
+
+		useProgrammaticCardMovesMock.mockReturnValue({
+			handleProgrammaticCardMoveReady: () => {},
+			setRequestMoveTaskToTrashHandler: () => {},
+			tryProgrammaticCardMove: () => "unavailable" as const,
+			consumeProgrammaticCardMove: () => ({}),
+			resolvePendingProgrammaticTrashMove: () => {},
+			waitForProgrammaticCardMoveAvailability: async () => {},
+			resetProgrammaticCardMoves: () => {},
+			requestMoveTaskToTrashWithAnimation: async () => {},
+			programmaticCardMoveCycle: 0,
+		});
+		useLinkedBacklogTaskActionsMock.mockReturnValue({
+			handleCreateDependency: () => {},
+			handleDeleteDependency: () => {},
+			confirmMoveTaskToTrash: async () => {},
+			requestMoveTaskToTrash: async () => {},
+		});
+
+		const task = createTask("task-1", "Task", 1);
+		const board: BoardData = {
+			columns: [
+				{ id: "backlog", title: "Backlog", cards: [] },
+				{ id: "in_progress", title: "In Progress", cards: [] },
+				{ id: "test", title: "Test", cards: [] },
+				{ id: "code_review", title: "Code Review", cards: [task] },
+				{ id: "review", title: "Review", cards: [] },
+				{ id: "trash", title: "Trash", cards: [] },
+			],
+			dependencies: [],
+		};
+		const sessions: Record<string, RuntimeTaskSessionSummary> = {
+			"task-1": {
+				taskId: "task-1",
+				state: "awaiting_review",
+				agentId: "codex",
+				workspacePath: "/tmp/task-1",
+				pid: 123,
+				startedAt: 1,
+				updatedAt: 10,
+				lastOutputAt: 10,
+				reviewReason: "hook",
+				exitCode: null,
+				lastHookAt: 10,
+				latestHookActivity: {
+					activityText: null,
+					toolName: null,
+					toolInputSummary: null,
+					finalMessage: "Done",
+					hookEventName: null,
+					notificationType: null,
+					source: null,
+				},
+				warningMessage: null,
+			},
+		};
+
+		await act(async () => {
+			root.render(
+				<SessionTransitionHarness
+					initialBoard={board}
+					initialSessions={sessions}
+					sendTaskSessionInput={sendTaskSessionInput}
+					testPromptTemplate="run tests"
+					testFailurePromptTemplate="fix failing test"
+					codeReviewPromptTemplate="run review"
+					codeReviewFailurePromptTemplate="fix review"
+					onSnapshot={(snapshot) => {
+						latestBoard = snapshot.board ?? null;
+						latestSetSessions = snapshot.setSessions ?? null;
+					}}
+				/>,
+			);
+		});
+
+		const setSessions = latestSetSessions as Dispatch<
+			SetStateAction<Record<string, RuntimeTaskSessionSummary>>
+		> | null;
+		if (!setSessions) {
+			throw new Error("Expected session setter.");
+		}
+		const currentSession = sessions["task-1"];
+		if (!currentSession?.latestHookActivity) {
+			throw new Error("Expected task session.");
+		}
+		const currentHookActivity = currentSession.latestHookActivity;
+
+		await act(async () => {
+			setSessions({
+				"task-1": {
+					...currentSession,
+					updatedAt: 11,
+					lastOutputAt: 11,
+					lastHookAt: 11,
+					latestHookActivity: {
+						...currentHookActivity,
+						finalMessage: "Clean review. CODE REVIEW PASSED",
+					},
+				},
+			});
+		});
+
+		const boardAfterUpdate = latestBoard as BoardData | null;
+		if (!boardAfterUpdate) {
+			throw new Error("Expected latest board snapshot.");
+		}
+		expect(boardAfterUpdate.columns.find((column) => column.id === "review")?.cards[0]?.id).toBe("task-1");
+		expect(boardAfterUpdate.columns.find((column) => column.id === "code_review")?.cards[0]?.id).toBeUndefined();
+	});
+
+	it("routes failed code review back to In Progress and sends the follow-up prompt", async () => {
+		let latestBoard: BoardData | null = null;
+		let latestSetSessions: Dispatch<SetStateAction<Record<string, RuntimeTaskSessionSummary>>> | null = null;
+		const sendTaskSessionInput = vi.fn(async () => ({ ok: true as const }));
+
+		useProgrammaticCardMovesMock.mockReturnValue({
+			handleProgrammaticCardMoveReady: () => {},
+			setRequestMoveTaskToTrashHandler: () => {},
+			tryProgrammaticCardMove: () => "unavailable" as const,
+			consumeProgrammaticCardMove: () => ({}),
+			resolvePendingProgrammaticTrashMove: () => {},
+			waitForProgrammaticCardMoveAvailability: async () => {},
+			resetProgrammaticCardMoves: () => {},
+			requestMoveTaskToTrashWithAnimation: async () => {},
+			programmaticCardMoveCycle: 0,
+		});
+		useLinkedBacklogTaskActionsMock.mockReturnValue({
+			handleCreateDependency: () => {},
+			handleDeleteDependency: () => {},
+			confirmMoveTaskToTrash: async () => {},
+			requestMoveTaskToTrash: async () => {},
+		});
+
+		const task = createTask("task-1", "Task", 1);
+		const board: BoardData = {
+			columns: [
+				{ id: "backlog", title: "Backlog", cards: [] },
+				{ id: "in_progress", title: "In Progress", cards: [] },
+				{ id: "test", title: "Test", cards: [] },
+				{ id: "code_review", title: "Code Review", cards: [task] },
+				{ id: "review", title: "Review", cards: [] },
+				{ id: "trash", title: "Trash", cards: [] },
+			],
+			dependencies: [],
+		};
+		const sessions: Record<string, RuntimeTaskSessionSummary> = {
+			"task-1": {
+				taskId: "task-1",
+				state: "awaiting_review",
+				agentId: "codex",
+				workspacePath: "/tmp/task-1",
+				pid: 123,
+				startedAt: 1,
+				updatedAt: 10,
+				lastOutputAt: 10,
+				reviewReason: "hook",
+				exitCode: null,
+				lastHookAt: 10,
+				latestHookActivity: {
+					activityText: null,
+					toolName: null,
+					toolInputSummary: null,
+					finalMessage: "Done",
+					hookEventName: null,
+					notificationType: null,
+					source: null,
+				},
+				warningMessage: null,
+			},
+		};
+
+		await act(async () => {
+			root.render(
+				<SessionTransitionHarness
+					initialBoard={board}
+					initialSessions={sessions}
+					sendTaskSessionInput={sendTaskSessionInput}
+					testPromptTemplate="run tests"
+					testFailurePromptTemplate="fix failing test"
+					codeReviewPromptTemplate="run review"
+					codeReviewFailurePromptTemplate="fix review"
+					onSnapshot={(snapshot) => {
+						latestBoard = snapshot.board ?? null;
+						latestSetSessions = snapshot.setSessions ?? null;
+					}}
+				/>,
+			);
+		});
+
+		const setSessions = latestSetSessions as Dispatch<
+			SetStateAction<Record<string, RuntimeTaskSessionSummary>>
+		> | null;
+		if (!setSessions) {
+			throw new Error("Expected session setter.");
+		}
+		const currentSession = sessions["task-1"];
+		if (!currentSession?.latestHookActivity) {
+			throw new Error("Expected task session.");
+		}
+		const currentHookActivity = currentSession.latestHookActivity;
+
+		await act(async () => {
+			setSessions({
+				"task-1": {
+					...currentSession,
+					updatedAt: 11,
+					lastOutputAt: 11,
+					lastHookAt: 11,
+					latestHookActivity: {
+						...currentHookActivity,
+						finalMessage: "Needs fixes. CODE REVIEW FAILED",
+					},
+				},
+			});
+		});
+
+		const boardAfterUpdate = latestBoard as BoardData | null;
+		if (!boardAfterUpdate) {
+			throw new Error("Expected latest board snapshot.");
+		}
+		expect(boardAfterUpdate.columns.find((column) => column.id === "in_progress")?.cards[0]?.id).toBe("task-1");
+		expect(boardAfterUpdate.columns.find((column) => column.id === "code_review")?.cards[0]?.id).toBeUndefined();
+		await act(async () => {
+			vi.advanceTimersByTime(200);
+			await Promise.resolve();
+		});
+		expect(sendTaskSessionInput).toHaveBeenCalledWith("task-1", "fix review", {
+			appendNewline: false,
+			mode: "paste",
+		});
 	});
 
 	it("waits for a new backlog card height to settle before starting animation", async () => {

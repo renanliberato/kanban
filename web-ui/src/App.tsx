@@ -180,6 +180,8 @@ export default function App(): ReactElement {
 	const readyForReviewNotificationsEnabled = runtimeProjectConfig?.readyForReviewNotificationsEnabled ?? true;
 	const testPromptTemplate = runtimeProjectConfig?.testPromptTemplate ?? "";
 	const testFailurePromptTemplate = runtimeProjectConfig?.testFailurePromptTemplate ?? "";
+	const codeReviewPromptTemplate = runtimeProjectConfig?.codeReviewPromptTemplate ?? "";
+	const codeReviewFailurePromptTemplate = runtimeProjectConfig?.codeReviewFailurePromptTemplate ?? "";
 	const shortcuts = runtimeProjectConfig?.shortcuts ?? [];
 	const selectedShortcutLabel = useMemo(() => {
 		if (shortcuts.length === 0) {
@@ -588,6 +590,8 @@ export default function App(): ReactElement {
 		readyForReviewNotificationsEnabled,
 		testPromptTemplate,
 		testFailurePromptTemplate,
+		codeReviewPromptTemplate,
+		codeReviewFailurePromptTemplate,
 		taskGitActionLoadingByTaskId,
 		runAutoReviewGitAction,
 	});

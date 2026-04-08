@@ -402,7 +402,11 @@ export function BoardCard({
 	};
 	const statusMarker = renderStatusMarker();
 	const showWorkspaceStatus =
-		columnId === "in_progress" || columnId === "test" || columnId === "review" || isTrashCard;
+		columnId === "in_progress" ||
+		columnId === "test" ||
+		columnId === "code_review" ||
+		columnId === "review" ||
+		isTrashCard;
 	const reviewWorkspacePath = reviewWorkspaceSnapshot
 		? formatPathForDisplay(reviewWorkspaceSnapshot.path)
 		: isTrashCard

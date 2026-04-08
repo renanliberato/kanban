@@ -73,7 +73,7 @@ export type RuntimeSlashCommandsResponse = z.infer<typeof runtimeSlashCommandsRe
 export const runtimeAgentIdSchema = z.enum(["claude", "codex", "gemini", "opencode", "droid", "cline"]);
 export type RuntimeAgentId = z.infer<typeof runtimeAgentIdSchema>;
 
-export const runtimeBoardColumnIdSchema = z.enum(["backlog", "in_progress", "test", "review", "trash"]);
+export const runtimeBoardColumnIdSchema = z.enum(["backlog", "in_progress", "test", "code_review", "review", "trash"]);
 export type RuntimeBoardColumnId = z.infer<typeof runtimeBoardColumnIdSchema>;
 
 export const runtimeTaskAutoReviewModeSchema = z.enum(["commit", "pr", "move_to_trash"]);
@@ -262,6 +262,7 @@ export const runtimeProjectTaskCountsSchema = z.object({
 	backlog: z.number(),
 	in_progress: z.number(),
 	test: z.number(),
+	code_review: z.number(),
 	review: z.number(),
 	trash: z.number(),
 });
@@ -788,10 +789,14 @@ export const runtimeConfigResponseSchema = z.object({
 	openPrPromptTemplate: z.string(),
 	testPromptTemplate: z.string().optional(),
 	testFailurePromptTemplate: z.string().optional(),
+	codeReviewPromptTemplate: z.string().optional(),
+	codeReviewFailurePromptTemplate: z.string().optional(),
 	commitPromptTemplateDefault: z.string(),
 	openPrPromptTemplateDefault: z.string(),
 	testPromptTemplateDefault: z.string().optional(),
 	testFailurePromptTemplateDefault: z.string().optional(),
+	codeReviewPromptTemplateDefault: z.string().optional(),
+	codeReviewFailurePromptTemplateDefault: z.string().optional(),
 });
 export type RuntimeConfigResponse = z.infer<typeof runtimeConfigResponseSchema>;
 
@@ -805,6 +810,8 @@ export const runtimeConfigSaveRequestSchema = z.object({
 	openPrPromptTemplate: z.string().optional(),
 	testPromptTemplate: z.string().optional(),
 	testFailurePromptTemplate: z.string().optional(),
+	codeReviewPromptTemplate: z.string().optional(),
+	codeReviewFailurePromptTemplate: z.string().optional(),
 });
 export type RuntimeConfigSaveRequest = z.infer<typeof runtimeConfigSaveRequestSchema>;
 

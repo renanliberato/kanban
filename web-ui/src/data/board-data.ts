@@ -4,6 +4,7 @@ const columnOrder: Array<{ id: BoardColumnId; title: string }> = [
 	{ id: "backlog", title: "Backlog" },
 	{ id: "in_progress", title: "In Progress" },
 	{ id: "test", title: "Test" },
+	{ id: "code_review", title: "Code Review" },
 	{ id: "review", title: "Review" },
 	{ id: "trash", title: "Trash" },
 ];

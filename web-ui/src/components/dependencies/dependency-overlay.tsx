@@ -57,7 +57,7 @@ interface AnchorPoint {
 
 const SOURCE_CONNECTOR_PADDING = 2;
 const TARGET_CONNECTOR_PADDING = 8;
-const COLUMN_ORDER: BoardColumnId[] = ["backlog", "in_progress", "test", "review", "trash"];
+const COLUMN_ORDER: BoardColumnId[] = ["backlog", "in_progress", "test", "code_review", "review", "trash"];
 const SIDE_NORMALS: Record<AnchorSide, { x: number; y: number }> = {
 	left: { x: -1, y: 0 },
 	right: { x: 1, y: 0 },
@@ -145,7 +145,14 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 function normalizeColumnId(value: string | undefined): BoardColumnId | null {
-	if (value === "backlog" || value === "in_progress" || value === "test" || value === "review" || value === "trash") {
+	if (
+		value === "backlog" ||
+		value === "in_progress" ||
+		value === "test" ||
+		value === "code_review" ||
+		value === "review" ||
+		value === "trash"
+	) {
 		return value;
 	}
 	return null;
@@ -208,7 +215,10 @@ function chooseConnection(
 		const sourceSide: AnchorSide =
 			firstColumnId === "backlog"
 				? "right"
-				: firstColumnId === "in_progress" || firstColumnId === "test" || firstColumnId === "review"
+				: firstColumnId === "in_progress" ||
+						firstColumnId === "test" ||
+						firstColumnId === "code_review" ||
+						firstColumnId === "review"
 					? "left"
 					: "left";
 		const targetSide: AnchorSide = sourceSide === "right" ? "left" : "right";
@@ -223,6 +233,7 @@ function chooseConnection(
 			secondColumnId === "backlog" ||
 			secondColumnId === "in_progress" ||
 			secondColumnId === "test" ||
+			secondColumnId === "code_review" ||
 			secondColumnId === "review"
 				? "right"
 				: "left";
@@ -240,6 +251,7 @@ function chooseConnection(
 		(firstColumnId === "backlog" ||
 			firstColumnId === "in_progress" ||
 			firstColumnId === "test" ||
+			firstColumnId === "code_review" ||
 			firstColumnId === "review")
 	) {
 		return {

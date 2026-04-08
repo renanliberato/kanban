@@ -19,6 +19,8 @@ interface RuntimeGlobalConfigFileShape {
 	openPrPromptTemplate?: string;
 	testPromptTemplate?: string;
 	testFailurePromptTemplate?: string;
+	codeReviewPromptTemplate?: string;
+	codeReviewFailurePromptTemplate?: string;
 }
 
 interface RuntimeProjectConfigFileShape {
@@ -37,10 +39,14 @@ export interface RuntimeConfigState {
 	openPrPromptTemplate: string;
 	testPromptTemplate?: string;
 	testFailurePromptTemplate?: string;
+	codeReviewPromptTemplate?: string;
+	codeReviewFailurePromptTemplate?: string;
 	commitPromptTemplateDefault: string;
 	openPrPromptTemplateDefault: string;
 	testPromptTemplateDefault?: string;
 	testFailurePromptTemplateDefault?: string;
+	codeReviewPromptTemplateDefault?: string;
+	codeReviewFailurePromptTemplateDefault?: string;
 }
 
 export interface RuntimeConfigUpdateInput {
@@ -53,6 +59,8 @@ export interface RuntimeConfigUpdateInput {
 	openPrPromptTemplate?: string;
 	testPromptTemplate?: string;
 	testFailurePromptTemplate?: string;
+	codeReviewPromptTemplate?: string;
+	codeReviewFailurePromptTemplate?: string;
 }
 
 const RUNTIME_HOME_PARENT_DIR = ".cline";
@@ -128,6 +136,27 @@ Steps:
 4. Summarize what failed and what was fixed.
 
 When finished, hand off for another test run.`;
+const DEFAULT_CODE_REVIEW_PROMPT_TEMPLATE = `Run the /review skill against the current task changes.
+
+Rules:
+- Treat any finding labeled "blocker" or "should fix" as a failing result.
+- Summarize those blocker/should-fix findings clearly if any exist.
+- If blocker/should-fix findings exist, your final line must include: CODE REVIEW FAILED
+- If no blocker/should-fix findings exist, your final line must include: CODE REVIEW PASSED
+
+Return:
+- Short summary of the review
+- Blocker/should-fix findings that must be addressed, if any
+- Final line with either CODE REVIEW FAILED or CODE REVIEW PASSED`;
+const DEFAULT_CODE_REVIEW_FAILURE_PROMPT_TEMPLATE = `Code review found blocker or should-fix feedback.
+
+Steps:
+1. Review the blocker and should-fix findings carefully.
+2. Apply the minimal code changes needed to address them.
+3. Re-check your work so the task is ready for another /review pass.
+4. Summarize what you fixed.
+
+When finished, hand off for another code review run.`;
 
 export function pickBestInstalledAgentIdFromDetected(detectedCommands: readonly string[]): RuntimeAgentId | null {
 	const detected = new Set(detectedCommands);
@@ -320,10 +349,20 @@ function toRuntimeConfigState({
 			globalConfig?.testFailurePromptTemplate,
 			DEFAULT_TEST_FAILURE_PROMPT_TEMPLATE,
 		),
+		codeReviewPromptTemplate: normalizePromptTemplate(
+			globalConfig?.codeReviewPromptTemplate,
+			DEFAULT_CODE_REVIEW_PROMPT_TEMPLATE,
+		),
+		codeReviewFailurePromptTemplate: normalizePromptTemplate(
+			globalConfig?.codeReviewFailurePromptTemplate,
+			DEFAULT_CODE_REVIEW_FAILURE_PROMPT_TEMPLATE,
+		),
 		commitPromptTemplateDefault: DEFAULT_COMMIT_PROMPT_TEMPLATE,
 		openPrPromptTemplateDefault: DEFAULT_OPEN_PR_PROMPT_TEMPLATE,
 		testPromptTemplateDefault: DEFAULT_TEST_PROMPT_TEMPLATE,
 		testFailurePromptTemplateDefault: DEFAULT_TEST_FAILURE_PROMPT_TEMPLATE,
+		codeReviewPromptTemplateDefault: DEFAULT_CODE_REVIEW_PROMPT_TEMPLATE,
+		codeReviewFailurePromptTemplateDefault: DEFAULT_CODE_REVIEW_FAILURE_PROMPT_TEMPLATE,
 	};
 }
 
@@ -347,6 +386,8 @@ async function writeRuntimeGlobalConfigFile(
 		openPrPromptTemplate?: string;
 		testPromptTemplate?: string;
 		testFailurePromptTemplate?: string;
+		codeReviewPromptTemplate?: string;
+		codeReviewFailurePromptTemplate?: string;
 	},
 ): Promise<void> {
 	const existing = await readRuntimeConfigFile<RuntimeGlobalConfigFileShape>(configPath);
@@ -383,6 +424,14 @@ async function writeRuntimeGlobalConfigFile(
 		config.testFailurePromptTemplate === undefined
 			? DEFAULT_TEST_FAILURE_PROMPT_TEMPLATE
 			: normalizePromptTemplate(config.testFailurePromptTemplate, DEFAULT_TEST_FAILURE_PROMPT_TEMPLATE);
+	const codeReviewPromptTemplate =
+		config.codeReviewPromptTemplate === undefined
+			? DEFAULT_CODE_REVIEW_PROMPT_TEMPLATE
+			: normalizePromptTemplate(config.codeReviewPromptTemplate, DEFAULT_CODE_REVIEW_PROMPT_TEMPLATE);
+	const codeReviewFailurePromptTemplate =
+		config.codeReviewFailurePromptTemplate === undefined
+			? DEFAULT_CODE_REVIEW_FAILURE_PROMPT_TEMPLATE
+			: normalizePromptTemplate(config.codeReviewFailurePromptTemplate, DEFAULT_CODE_REVIEW_FAILURE_PROMPT_TEMPLATE);
 
 	const payload: RuntimeGlobalConfigFileShape = {};
 	if (selectedAgentId !== undefined) {
@@ -425,6 +474,18 @@ async function writeRuntimeGlobalConfigFile(
 		testFailurePromptTemplate !== DEFAULT_TEST_FAILURE_PROMPT_TEMPLATE
 	) {
 		payload.testFailurePromptTemplate = testFailurePromptTemplate;
+	}
+	if (
+		hasOwnKey(existing, "codeReviewPromptTemplate") ||
+		codeReviewPromptTemplate !== DEFAULT_CODE_REVIEW_PROMPT_TEMPLATE
+	) {
+		payload.codeReviewPromptTemplate = codeReviewPromptTemplate;
+	}
+	if (
+		hasOwnKey(existing, "codeReviewFailurePromptTemplate") ||
+		codeReviewFailurePromptTemplate !== DEFAULT_CODE_REVIEW_FAILURE_PROMPT_TEMPLATE
+	) {
+		payload.codeReviewFailurePromptTemplate = codeReviewFailurePromptTemplate;
 	}
 
 	await lockedFileSystem.writeJsonFileAtomic(configPath, payload, {
@@ -510,6 +571,8 @@ function createRuntimeConfigStateFromValues(input: {
 	openPrPromptTemplate: string;
 	testPromptTemplate?: string;
 	testFailurePromptTemplate?: string;
+	codeReviewPromptTemplate?: string;
+	codeReviewFailurePromptTemplate?: string;
 }): RuntimeConfigState {
 	return {
 		globalConfigPath: input.globalConfigPath,
@@ -532,10 +595,20 @@ function createRuntimeConfigStateFromValues(input: {
 			input.testFailurePromptTemplate,
 			DEFAULT_TEST_FAILURE_PROMPT_TEMPLATE,
 		),
+		codeReviewPromptTemplate: normalizePromptTemplate(
+			input.codeReviewPromptTemplate,
+			DEFAULT_CODE_REVIEW_PROMPT_TEMPLATE,
+		),
+		codeReviewFailurePromptTemplate: normalizePromptTemplate(
+			input.codeReviewFailurePromptTemplate,
+			DEFAULT_CODE_REVIEW_FAILURE_PROMPT_TEMPLATE,
+		),
 		commitPromptTemplateDefault: DEFAULT_COMMIT_PROMPT_TEMPLATE,
 		openPrPromptTemplateDefault: DEFAULT_OPEN_PR_PROMPT_TEMPLATE,
 		testPromptTemplateDefault: DEFAULT_TEST_PROMPT_TEMPLATE,
 		testFailurePromptTemplateDefault: DEFAULT_TEST_FAILURE_PROMPT_TEMPLATE,
+		codeReviewPromptTemplateDefault: DEFAULT_CODE_REVIEW_PROMPT_TEMPLATE,
+		codeReviewFailurePromptTemplateDefault: DEFAULT_CODE_REVIEW_FAILURE_PROMPT_TEMPLATE,
 	};
 }
 
@@ -552,6 +625,8 @@ export function toGlobalRuntimeConfigState(current: RuntimeConfigState): Runtime
 		openPrPromptTemplate: current.openPrPromptTemplate,
 		testPromptTemplate: current.testPromptTemplate,
 		testFailurePromptTemplate: current.testFailurePromptTemplate,
+		codeReviewPromptTemplate: current.codeReviewPromptTemplate,
+		codeReviewFailurePromptTemplate: current.codeReviewFailurePromptTemplate,
 	});
 }
 
@@ -589,6 +664,8 @@ export async function saveRuntimeConfig(
 		openPrPromptTemplate: string;
 		testPromptTemplate?: string;
 		testFailurePromptTemplate?: string;
+		codeReviewPromptTemplate?: string;
+		codeReviewFailurePromptTemplate?: string;
 	},
 ): Promise<RuntimeConfigState> {
 	const { globalConfigPath, projectConfigPath } = resolveRuntimeConfigPaths(cwd);
@@ -602,6 +679,8 @@ export async function saveRuntimeConfig(
 			openPrPromptTemplate: config.openPrPromptTemplate,
 			testPromptTemplate: config.testPromptTemplate,
 			testFailurePromptTemplate: config.testFailurePromptTemplate,
+			codeReviewPromptTemplate: config.codeReviewPromptTemplate,
+			codeReviewFailurePromptTemplate: config.codeReviewFailurePromptTemplate,
 		});
 		await writeRuntimeProjectConfigFile(projectConfigPath, { shortcuts: config.shortcuts });
 		return createRuntimeConfigStateFromValues({
@@ -616,6 +695,8 @@ export async function saveRuntimeConfig(
 			openPrPromptTemplate: config.openPrPromptTemplate,
 			testPromptTemplate: config.testPromptTemplate,
 			testFailurePromptTemplate: config.testFailurePromptTemplate,
+			codeReviewPromptTemplate: config.codeReviewPromptTemplate,
+			codeReviewFailurePromptTemplate: config.codeReviewFailurePromptTemplate,
 		});
 	});
 }
@@ -639,6 +720,9 @@ export async function updateRuntimeConfig(cwd: string, updates: RuntimeConfigUpd
 			openPrPromptTemplate: updates.openPrPromptTemplate ?? current.openPrPromptTemplate,
 			testPromptTemplate: updates.testPromptTemplate ?? current.testPromptTemplate,
 			testFailurePromptTemplate: updates.testFailurePromptTemplate ?? current.testFailurePromptTemplate,
+			codeReviewPromptTemplate: updates.codeReviewPromptTemplate ?? current.codeReviewPromptTemplate,
+			codeReviewFailurePromptTemplate:
+				updates.codeReviewFailurePromptTemplate ?? current.codeReviewFailurePromptTemplate,
 		};
 
 		const hasChanges =
@@ -650,6 +734,8 @@ export async function updateRuntimeConfig(cwd: string, updates: RuntimeConfigUpd
 			nextConfig.openPrPromptTemplate !== current.openPrPromptTemplate ||
 			nextConfig.testPromptTemplate !== current.testPromptTemplate ||
 			nextConfig.testFailurePromptTemplate !== current.testFailurePromptTemplate ||
+			nextConfig.codeReviewPromptTemplate !== current.codeReviewPromptTemplate ||
+			nextConfig.codeReviewFailurePromptTemplate !== current.codeReviewFailurePromptTemplate ||
 			!areRuntimeProjectShortcutsEqual(nextConfig.shortcuts, current.shortcuts);
 
 		if (!hasChanges) {
@@ -665,6 +751,8 @@ export async function updateRuntimeConfig(cwd: string, updates: RuntimeConfigUpd
 			openPrPromptTemplate: nextConfig.openPrPromptTemplate,
 			testPromptTemplate: nextConfig.testPromptTemplate,
 			testFailurePromptTemplate: nextConfig.testFailurePromptTemplate,
+			codeReviewPromptTemplate: nextConfig.codeReviewPromptTemplate,
+			codeReviewFailurePromptTemplate: nextConfig.codeReviewFailurePromptTemplate,
 		});
 		await writeRuntimeProjectConfigFile(projectConfigPath, {
 			shortcuts: nextConfig.shortcuts,
@@ -681,6 +769,8 @@ export async function updateRuntimeConfig(cwd: string, updates: RuntimeConfigUpd
 			openPrPromptTemplate: nextConfig.openPrPromptTemplate,
 			testPromptTemplate: nextConfig.testPromptTemplate,
 			testFailurePromptTemplate: nextConfig.testFailurePromptTemplate,
+			codeReviewPromptTemplate: nextConfig.codeReviewPromptTemplate,
+			codeReviewFailurePromptTemplate: nextConfig.codeReviewFailurePromptTemplate,
 		});
 	});
 }
@@ -712,6 +802,9 @@ export async function updateGlobalRuntimeConfig(
 				openPrPromptTemplate: updates.openPrPromptTemplate ?? current.openPrPromptTemplate,
 				testPromptTemplate: updates.testPromptTemplate ?? current.testPromptTemplate,
 				testFailurePromptTemplate: updates.testFailurePromptTemplate ?? current.testFailurePromptTemplate,
+				codeReviewPromptTemplate: updates.codeReviewPromptTemplate ?? current.codeReviewPromptTemplate,
+				codeReviewFailurePromptTemplate:
+					updates.codeReviewFailurePromptTemplate ?? current.codeReviewFailurePromptTemplate,
 			};
 
 			const hasChanges =
@@ -722,7 +815,9 @@ export async function updateGlobalRuntimeConfig(
 				nextConfig.commitPromptTemplate !== current.commitPromptTemplate ||
 				nextConfig.openPrPromptTemplate !== current.openPrPromptTemplate ||
 				nextConfig.testPromptTemplate !== current.testPromptTemplate ||
-				nextConfig.testFailurePromptTemplate !== current.testFailurePromptTemplate;
+				nextConfig.testFailurePromptTemplate !== current.testFailurePromptTemplate ||
+				nextConfig.codeReviewPromptTemplate !== current.codeReviewPromptTemplate ||
+				nextConfig.codeReviewFailurePromptTemplate !== current.codeReviewFailurePromptTemplate;
 
 			if (!hasChanges) {
 				return current;
@@ -737,6 +832,8 @@ export async function updateGlobalRuntimeConfig(
 				openPrPromptTemplate: nextConfig.openPrPromptTemplate,
 				testPromptTemplate: nextConfig.testPromptTemplate,
 				testFailurePromptTemplate: nextConfig.testFailurePromptTemplate,
+				codeReviewPromptTemplate: nextConfig.codeReviewPromptTemplate,
+				codeReviewFailurePromptTemplate: nextConfig.codeReviewFailurePromptTemplate,
 			});
 
 			return createRuntimeConfigStateFromValues({
@@ -751,6 +848,8 @@ export async function updateGlobalRuntimeConfig(
 				openPrPromptTemplate: nextConfig.openPrPromptTemplate,
 				testPromptTemplate: nextConfig.testPromptTemplate,
 				testFailurePromptTemplate: nextConfig.testFailurePromptTemplate,
+				codeReviewPromptTemplate: nextConfig.codeReviewPromptTemplate,
+				codeReviewFailurePromptTemplate: nextConfig.codeReviewFailurePromptTemplate,
 			});
 		},
 	);

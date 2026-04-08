@@ -23,6 +23,7 @@ const PROJECTS: RuntimeProjectSummary[] = [
 			backlog: 0,
 			in_progress: 0,
 			test: 0,
+			code_review: 0,
 			review: 0,
 			trash: 0,
 		},

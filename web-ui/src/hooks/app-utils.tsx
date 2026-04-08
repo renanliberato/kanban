@@ -24,6 +24,7 @@ export function countTasksByColumn(board: BoardData): {
 	backlog: number;
 	in_progress: number;
 	test: number;
+	code_review: number;
 	review: number;
 	trash: number;
 } {
@@ -31,6 +32,7 @@ export function countTasksByColumn(board: BoardData): {
 		backlog: 0,
 		in_progress: 0,
 		test: 0,
+		code_review: 0,
 		review: 0,
 		trash: 0,
 	};
@@ -45,6 +47,10 @@ export function countTasksByColumn(board: BoardData): {
 		}
 		if (column.id === "test") {
 			counts.test += column.cards.length;
+			continue;
+		}
+		if (column.id === "code_review") {
+			counts.code_review += column.cards.length;
 			continue;
 		}
 		if (column.id === "review") {

@@ -310,6 +310,8 @@ export function RuntimeSettingsDialog({
 	const [openPrPromptTemplate, setOpenPrPromptTemplate] = useState("");
 	const [testPromptTemplate, setTestPromptTemplate] = useState("");
 	const [testFailurePromptTemplate, setTestFailurePromptTemplate] = useState("");
+	const [codeReviewPromptTemplate, setCodeReviewPromptTemplate] = useState("");
+	const [codeReviewFailurePromptTemplate, setCodeReviewFailurePromptTemplate] = useState("");
 	const [selectedPromptVariant, setSelectedPromptVariant] = useState<TaskGitAction>("commit");
 	const [copiedVariableToken, setCopiedVariableToken] = useState<string | null>(null);
 	const [saveError, setSaveError] = useState<string | null>(null);
@@ -322,6 +324,8 @@ export function RuntimeSettingsDialog({
 	const openPrPromptTemplateDefault = config?.openPrPromptTemplateDefault ?? "";
 	const testPromptTemplateDefault = config?.testPromptTemplateDefault ?? "";
 	const testFailurePromptTemplateDefault = config?.testFailurePromptTemplateDefault ?? "";
+	const codeReviewPromptTemplateDefault = config?.codeReviewPromptTemplateDefault ?? "";
+	const codeReviewFailurePromptTemplateDefault = config?.codeReviewFailurePromptTemplateDefault ?? "";
 	const isCommitPromptAtDefault =
 		normalizeTemplateForComparison(commitPromptTemplate) ===
 		normalizeTemplateForComparison(commitPromptTemplateDefault);
@@ -377,6 +381,8 @@ export function RuntimeSettingsDialog({
 	const initialOpenPrPromptTemplate = config?.openPrPromptTemplate ?? "";
 	const initialTestPromptTemplate = config?.testPromptTemplate ?? "";
 	const initialTestFailurePromptTemplate = config?.testFailurePromptTemplate ?? "";
+	const initialCodeReviewPromptTemplate = config?.codeReviewPromptTemplate ?? "";
+	const initialCodeReviewFailurePromptTemplate = config?.codeReviewFailurePromptTemplate ?? "";
 	const clineSettings = useRuntimeSettingsClineController({
 		open,
 		workspaceId,
@@ -432,18 +438,34 @@ export function RuntimeSettingsDialog({
 		) {
 			return true;
 		}
-		return (
+		if (
 			normalizeTemplateForComparison(testFailurePromptTemplate) !==
 			normalizeTemplateForComparison(initialTestFailurePromptTemplate)
+		) {
+			return true;
+		}
+		if (
+			normalizeTemplateForComparison(codeReviewPromptTemplate) !==
+			normalizeTemplateForComparison(initialCodeReviewPromptTemplate)
+		) {
+			return true;
+		}
+		return (
+			normalizeTemplateForComparison(codeReviewFailurePromptTemplate) !==
+			normalizeTemplateForComparison(initialCodeReviewFailurePromptTemplate)
 		);
 	}, [
 		agentAutonomousModeEnabled,
 		clineMcpSettings.hasUnsavedChanges,
 		clineSettings.hasUnsavedChanges,
 		commitPromptTemplate,
+		codeReviewFailurePromptTemplate,
+		codeReviewPromptTemplate,
 		config,
 		draftThemeId,
 		initialAgentAutonomousModeEnabled,
+		initialCodeReviewFailurePromptTemplate,
+		initialCodeReviewPromptTemplate,
 		initialCommitPromptTemplate,
 		initialOpenPrPromptTemplate,
 		initialReadyForReviewNotificationsEnabled,
@@ -472,9 +494,13 @@ export function RuntimeSettingsDialog({
 		setOpenPrPromptTemplate(config?.openPrPromptTemplate ?? "");
 		setTestPromptTemplate(config?.testPromptTemplate ?? "");
 		setTestFailurePromptTemplate(config?.testFailurePromptTemplate ?? "");
+		setCodeReviewPromptTemplate(config?.codeReviewPromptTemplate ?? "");
+		setCodeReviewFailurePromptTemplate(config?.codeReviewFailurePromptTemplate ?? "");
 		setSaveError(null);
 	}, [
 		config?.agentAutonomousModeEnabled,
+		config?.codeReviewFailurePromptTemplate,
+		config?.codeReviewPromptTemplate,
 		config?.commitPromptTemplate,
 		config?.openPrPromptTemplate,
 		config?.readyForReviewNotificationsEnabled,
@@ -614,6 +640,8 @@ export function RuntimeSettingsDialog({
 			openPrPromptTemplate,
 			testPromptTemplate,
 			testFailurePromptTemplate,
+			codeReviewPromptTemplate,
+			codeReviewFailurePromptTemplate,
 		});
 		if (!saved) {
 			setSaveError("Could not save runtime settings. Check runtime logs and try again.");
@@ -782,7 +810,7 @@ export function RuntimeSettingsDialog({
 
 				<h6 className="font-semibold text-text-primary mt-4 mb-1">Test automation prompts</h6>
 				<p className="text-text-secondary text-[13px] mt-0 mb-2">
-					These prompts drive the Test column workflow between In Progress and Review.
+					These prompts drive the Test column workflow between In Progress and Code Review.
 				</p>
 				<div className="flex items-center justify-between gap-2 mb-1">
 					<span className="text-[12px] text-text-secondary">Test prompt</span>
@@ -833,6 +861,62 @@ export function RuntimeSettingsDialog({
 				/>
 				<p className="text-text-secondary text-[12px] mt-1 mb-0">
 					Failure signal checked from final assistant message: <span className="font-mono">TEST FAILED</span>
+				</p>
+
+				<h6 className="font-semibold text-text-primary mt-4 mb-1">Code Review automation prompts</h6>
+				<p className="text-text-secondary text-[13px] mt-0 mb-2">
+					These prompts drive the Code Review column workflow between Test and Review.
+				</p>
+				<div className="flex items-center justify-between gap-2 mb-1">
+					<span className="text-[12px] text-text-secondary">Code review prompt</span>
+					<Button
+						variant="ghost"
+						size="sm"
+						onClick={() => setCodeReviewPromptTemplate(codeReviewPromptTemplateDefault)}
+						disabled={
+							controlsDisabled ||
+							normalizeTemplateForComparison(codeReviewPromptTemplate) ===
+								normalizeTemplateForComparison(codeReviewPromptTemplateDefault)
+						}
+					>
+						Reset
+					</Button>
+				</div>
+				<textarea
+					rows={5}
+					value={codeReviewPromptTemplate}
+					onChange={(event) => setCodeReviewPromptTemplate(event.target.value)}
+					placeholder="Prompt used when a task enters the Code Review column."
+					disabled={controlsDisabled}
+					className="w-full rounded-md border border-border bg-surface-2 p-3 text-[13px] text-text-primary font-mono placeholder:text-text-tertiary focus:border-border-focus focus:outline-none resize-none disabled:opacity-40"
+				/>
+
+				<div className="flex items-center justify-between gap-2 mt-3 mb-1">
+					<span className="text-[12px] text-text-secondary">Failure follow-up prompt</span>
+					<Button
+						variant="ghost"
+						size="sm"
+						onClick={() => setCodeReviewFailurePromptTemplate(codeReviewFailurePromptTemplateDefault)}
+						disabled={
+							controlsDisabled ||
+							normalizeTemplateForComparison(codeReviewFailurePromptTemplate) ===
+								normalizeTemplateForComparison(codeReviewFailurePromptTemplateDefault)
+						}
+					>
+						Reset
+					</Button>
+				</div>
+				<textarea
+					rows={5}
+					value={codeReviewFailurePromptTemplate}
+					onChange={(event) => setCodeReviewFailurePromptTemplate(event.target.value)}
+					placeholder="Prompt sent when Code Review detects blocker or should-fix feedback."
+					disabled={controlsDisabled}
+					className="w-full rounded-md border border-border bg-surface-2 p-3 text-[13px] text-text-primary font-mono placeholder:text-text-tertiary focus:border-border-focus focus:outline-none resize-none disabled:opacity-40"
+				/>
+				<p className="text-text-secondary text-[12px] mt-1 mb-0">
+					Failure signal checked from final assistant message:{" "}
+					<span className="font-mono">CODE REVIEW FAILED</span>
 				</p>
 				<h6 className="font-semibold text-text-primary mt-4 mb-2">Notifications</h6>
 				<div className="flex items-center gap-2">

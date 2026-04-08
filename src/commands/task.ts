@@ -23,7 +23,7 @@ import { resolveProjectInputPath } from "../projects/project-path";
 import { loadWorkspaceContext, mutateWorkspaceState } from "../state/workspace-state";
 import type { RuntimeAppRouter } from "../trpc/app-router";
 
-const LIST_TASK_COLUMNS = ["backlog", "in_progress", "test", "review", "trash"] as const;
+const LIST_TASK_COLUMNS = ["backlog", "in_progress", "test", "code_review", "review", "trash"] as const;
 type ListTaskColumn = (typeof LIST_TASK_COLUMNS)[number];
 type TaskCommandTarget = { taskId?: string; column?: ListTaskColumn };
 
@@ -59,7 +59,14 @@ function parseListColumn(value: string | undefined): ListTaskColumn | undefined 
 	if (value === undefined) {
 		return undefined;
 	}
-	if (value === "backlog" || value === "in_progress" || value === "test" || value === "review" || value === "trash") {
+	if (
+		value === "backlog" ||
+		value === "in_progress" ||
+		value === "test" ||
+		value === "code_review" ||
+		value === "review" ||
+		value === "trash"
+	) {
 		return value;
 	}
 	throw new Error(`Invalid column "${value}". Expected one of: ${LIST_TASK_COLUMNS.join(", ")}.`);
@@ -598,7 +605,7 @@ interface TrashTaskMutationValue {
 }
 
 function columnCanHaveLiveTaskSession(columnId: ListTaskColumn): boolean {
-	return columnId === "in_progress" || columnId === "test" || columnId === "review";
+	return columnId === "in_progress" || columnId === "test" || columnId === "code_review" || columnId === "review";
 }
 
 async function trashTaskById(input: {

@@ -48,12 +48,20 @@ interface PendingProgrammaticStartMoveCompletion {
 const TEST_AUTOMATION_LOG_PREFIX = "[kanban][test-automation]";
 const TEST_FAILED_SIGNAL = "TEST FAILED";
 const TEST_PASSED_SIGNAL = "TEST PASSED";
+const CODE_REVIEW_FAILED_SIGNAL = "CODE REVIEW FAILED";
+const CODE_REVIEW_PASSED_SIGNAL = "CODE REVIEW PASSED";
 const DEFAULT_TEST_PROMPT = `Run the relevant tests now.
 
 If any test fails, include "${TEST_FAILED_SIGNAL}" in your final message.
 If tests pass, include "${TEST_PASSED_SIGNAL}" in your final message.`;
 const DEFAULT_TEST_FAILURE_PROMPT =
 	"Tests failed. Investigate the failing test output, fix the issue, and complete the task so it can be tested again.";
+const DEFAULT_CODE_REVIEW_PROMPT = `Run /review against the current task changes.
+
+If there are any findings labeled "blocker" or "should fix", include "${CODE_REVIEW_FAILED_SIGNAL}" in your final message.
+If there are no blocker or should-fix findings, include "${CODE_REVIEW_PASSED_SIGNAL}" in your final message.`;
+const DEFAULT_CODE_REVIEW_FAILURE_PROMPT =
+	"Code review found blocker or should-fix feedback. Fix those issues and complete the task so it can be reviewed again.";
 
 function resolveTestPromptTemplate(template: string): string {
 	const trimmed = template.trim();
@@ -65,6 +73,16 @@ function resolveTestFailurePromptTemplate(template: string): string {
 	return trimmed.length > 0 ? trimmed : DEFAULT_TEST_FAILURE_PROMPT;
 }
 
+function resolveCodeReviewPromptTemplate(template: string): string {
+	const trimmed = template.trim();
+	return trimmed.length > 0 ? trimmed : DEFAULT_CODE_REVIEW_PROMPT;
+}
+
+function resolveCodeReviewFailurePromptTemplate(template: string): string {
+	const trimmed = template.trim();
+	return trimmed.length > 0 ? trimmed : DEFAULT_CODE_REVIEW_FAILURE_PROMPT;
+}
+
 function hasTestFailureSignal(summary: RuntimeTaskSessionSummary): boolean {
 	const finalMessage = summary.latestHookActivity?.finalMessage?.trim() ?? "";
 	return finalMessage.toUpperCase().includes(TEST_FAILED_SIGNAL);
@@ -73,6 +91,16 @@ function hasTestFailureSignal(summary: RuntimeTaskSessionSummary): boolean {
 function hasTestPassedSignal(summary: RuntimeTaskSessionSummary): boolean {
 	const finalMessage = summary.latestHookActivity?.finalMessage?.trim() ?? "";
 	return finalMessage.toUpperCase().includes(TEST_PASSED_SIGNAL);
+}
+
+function hasCodeReviewFailureSignal(summary: RuntimeTaskSessionSummary): boolean {
+	const finalMessage = summary.latestHookActivity?.finalMessage?.trim() ?? "";
+	return finalMessage.toUpperCase().includes(CODE_REVIEW_FAILED_SIGNAL);
+}
+
+function hasCodeReviewPassedSignal(summary: RuntimeTaskSessionSummary): boolean {
+	const finalMessage = summary.latestHookActivity?.finalMessage?.trim() ?? "";
+	return finalMessage.toUpperCase().includes(CODE_REVIEW_PASSED_SIGNAL);
 }
 
 function logTestAutomation(taskId: string, message: string, details?: Record<string, unknown>): void {
@@ -107,6 +135,8 @@ interface UseBoardInteractionsInput {
 	readyForReviewNotificationsEnabled: boolean;
 	testPromptTemplate: string;
 	testFailurePromptTemplate: string;
+	codeReviewPromptTemplate: string;
+	codeReviewFailurePromptTemplate: string;
 	taskGitActionLoadingByTaskId: Record<string, TaskGitActionLoadingStateLike>;
 	runAutoReviewGitAction: (taskId: string, action: TaskGitAction) => Promise<boolean>;
 }
@@ -153,6 +183,8 @@ export function useBoardInteractions({
 	readyForReviewNotificationsEnabled,
 	testPromptTemplate,
 	testFailurePromptTemplate,
+	codeReviewPromptTemplate,
+	codeReviewFailurePromptTemplate,
 	taskGitActionLoadingByTaskId,
 	runAutoReviewGitAction,
 }: UseBoardInteractionsInput): UseBoardInteractionsResult {
@@ -167,6 +199,10 @@ export function useBoardInteractions({
 	const processedTestPromptSessionVersionByTaskIdRef = useRef<Record<string, number>>({});
 	const handledTestFailureSessionVersionByTaskIdRef = useRef<Record<string, number>>({});
 	const processedTestFailurePromptSessionVersionByTaskIdRef = useRef<Record<string, number>>({});
+	const enteredCodeReviewSessionVersionByTaskIdRef = useRef<Record<string, number>>({});
+	const processedCodeReviewPromptSessionVersionByTaskIdRef = useRef<Record<string, number>>({});
+	const handledCodeReviewFailureSessionVersionByTaskIdRef = useRef<Record<string, number>>({});
+	const processedCodeReviewFailurePromptSessionVersionByTaskIdRef = useRef<Record<string, number>>({});
 	const [moveToTrashLoadingById, setMoveToTrashLoadingById] = useState<Record<string, boolean>>({});
 	const {
 		handleProgrammaticCardMoveReady,
@@ -477,7 +513,11 @@ export function useBoardInteractions({
 	);
 
 	const sendAutomatedTaskPrompt = useCallback(
-		async (taskId: string, prompt: string, reason: "test" | "test_failure"): Promise<boolean> => {
+		async (
+			taskId: string,
+			prompt: string,
+			reason: "test" | "test_failure" | "code_review" | "code_review_failure",
+		): Promise<boolean> => {
 			logTestAutomation(taskId, `sending ${reason} prompt`, {
 				promptPreview: prompt.slice(0, 120),
 			});
@@ -510,6 +550,8 @@ export function useBoardInteractions({
 	useEffect(() => {
 		const queuedTestPrompts: Array<{ taskId: string; updatedAt: number }> = [];
 		const queuedTestFailurePrompts: Array<{ taskId: string; updatedAt: number }> = [];
+		const queuedCodeReviewPrompts: Array<{ taskId: string; updatedAt: number }> = [];
+		const queuedCodeReviewFailurePrompts: Array<{ taskId: string; updatedAt: number }> = [];
 		let nextBoard = board;
 		let boardChanged = false;
 		const previousSessions = previousSessionsRef.current;
@@ -521,11 +563,11 @@ export function useBoardInteractions({
 			}
 			const columnId = getTaskColumnId(nextBoard, summary.taskId);
 			if (summary.state === "awaiting_review" && columnId === "in_progress") {
-				const latestHandledFailureSessionVersion =
+				const latestHandledTestFailureSessionVersion =
 					handledTestFailureSessionVersionByTaskIdRef.current[summary.taskId];
 				if (
-					typeof latestHandledFailureSessionVersion === "number" &&
-					summary.updatedAt <= latestHandledFailureSessionVersion
+					typeof latestHandledTestFailureSessionVersion === "number" &&
+					summary.updatedAt <= latestHandledTestFailureSessionVersion
 				) {
 					if (processedTestFailurePromptSessionVersionByTaskIdRef.current[summary.taskId] !== summary.updatedAt) {
 						queuedTestFailurePrompts.push({
@@ -535,7 +577,28 @@ export function useBoardInteractions({
 					}
 					logTestAutomation(summary.taskId, "ignoring stale completion after handled test failure", {
 						summaryUpdatedAt: summary.updatedAt,
-						latestHandledFailureSessionVersion,
+						latestHandledFailureSessionVersion: latestHandledTestFailureSessionVersion,
+					});
+					continue;
+				}
+				const latestHandledCodeReviewFailureSessionVersion =
+					handledCodeReviewFailureSessionVersionByTaskIdRef.current[summary.taskId];
+				if (
+					typeof latestHandledCodeReviewFailureSessionVersion === "number" &&
+					summary.updatedAt <= latestHandledCodeReviewFailureSessionVersion
+				) {
+					if (
+						processedCodeReviewFailurePromptSessionVersionByTaskIdRef.current[summary.taskId] !==
+						summary.updatedAt
+					) {
+						queuedCodeReviewFailurePrompts.push({
+							taskId: summary.taskId,
+							updatedAt: summary.updatedAt,
+						});
+					}
+					logTestAutomation(summary.taskId, "ignoring stale completion after handled code-review failure", {
+						summaryUpdatedAt: summary.updatedAt,
+						latestHandledFailureSessionVersion: latestHandledCodeReviewFailureSessionVersion,
 					});
 					continue;
 				}
@@ -584,7 +647,7 @@ export function useBoardInteractions({
 				}
 				const hasTestFailedSignal = hasTestFailureSignal(summary);
 				const hasTestPassedSignalValue = hasTestPassedSignal(summary);
-				logTestAutomation(summary.taskId, "evaluating Test completion for Review move", {
+				logTestAutomation(summary.taskId, "evaluating Test completion for next move", {
 					summaryUpdatedAt: summary.updatedAt,
 					finalMessage: summary.latestHookActivity?.finalMessage ?? null,
 					hasTestPassedSignal: hasTestPassedSignalValue,
@@ -621,9 +684,98 @@ export function useBoardInteractions({
 					});
 					continue;
 				}
+				enteredCodeReviewSessionVersionByTaskIdRef.current[summary.taskId] = summary.updatedAt;
+				const programmaticMoveAttempt = tryProgrammaticCardMove(summary.taskId, columnId, "code_review");
+				if (programmaticMoveAttempt === "started" || programmaticMoveAttempt === "blocked") {
+					logTestAutomation(summary.taskId, "moving task from Test to Code Review via programmatic move", {
+						summaryUpdatedAt: summary.updatedAt,
+						programmaticMoveAttempt,
+					});
+					continue;
+				}
+				const moved = moveTaskToColumn(nextBoard, summary.taskId, "code_review", { insertAtTop: true });
+				if (moved.moved) {
+					nextBoard = moved.board;
+					boardChanged = true;
+					logTestAutomation(summary.taskId, "moved task from Test to Code Review", {
+						summaryUpdatedAt: summary.updatedAt,
+						finalMessage: summary.latestHookActivity?.finalMessage ?? null,
+					});
+				}
+				continue;
+			}
+			if (summary.state === "awaiting_review" && columnId === "code_review") {
+				let enteredCodeReviewSessionVersion = enteredCodeReviewSessionVersionByTaskIdRef.current[summary.taskId];
+				if (typeof enteredCodeReviewSessionVersion !== "number") {
+					enteredCodeReviewSessionVersion = summary.updatedAt;
+					enteredCodeReviewSessionVersionByTaskIdRef.current[summary.taskId] = enteredCodeReviewSessionVersion;
+					logTestAutomation(summary.taskId, "recovered missing Code Review entry version", {
+						summaryUpdatedAt: summary.updatedAt,
+					});
+				}
+				if (
+					processedCodeReviewPromptSessionVersionByTaskIdRef.current[summary.taskId] !==
+					enteredCodeReviewSessionVersion
+				) {
+					queuedCodeReviewPrompts.push({
+						taskId: summary.taskId,
+						updatedAt: enteredCodeReviewSessionVersion,
+					});
+				}
+				if (summary.updatedAt <= enteredCodeReviewSessionVersion) {
+					logTestAutomation(summary.taskId, "waiting for a post-Code-Review completion event", {
+						summaryUpdatedAt: summary.updatedAt,
+						enteredCodeReviewSessionVersion,
+						finalMessage: summary.latestHookActivity?.finalMessage ?? null,
+					});
+					continue;
+				}
+				const hasCodeReviewFailedSignal = hasCodeReviewFailureSignal(summary);
+				const hasCodeReviewPassedSignalValue = hasCodeReviewPassedSignal(summary);
+				logTestAutomation(summary.taskId, "evaluating Code Review completion for Review move", {
+					summaryUpdatedAt: summary.updatedAt,
+					finalMessage: summary.latestHookActivity?.finalMessage ?? null,
+					hasCodeReviewPassedSignal: hasCodeReviewPassedSignalValue,
+					hasCodeReviewFailedSignal,
+				});
+				if (hasCodeReviewFailedSignal) {
+					handledCodeReviewFailureSessionVersionByTaskIdRef.current[summary.taskId] = summary.updatedAt;
+					const programmaticMoveAttempt = tryProgrammaticCardMove(summary.taskId, columnId, "in_progress", {
+						skipKickoff: true,
+					});
+					if (programmaticMoveAttempt === "started" || programmaticMoveAttempt === "blocked") {
+						logTestAutomation(
+							summary.taskId,
+							"routing failed code review back to In Progress via programmatic move",
+							{
+								summaryUpdatedAt: summary.updatedAt,
+								finalMessage: summary.latestHookActivity?.finalMessage ?? null,
+								programmaticMoveAttempt,
+							},
+						);
+						continue;
+					}
+					const moved = moveTaskToColumn(nextBoard, summary.taskId, "in_progress", { insertAtTop: true });
+					if (moved.moved) {
+						nextBoard = moved.board;
+						boardChanged = true;
+						logTestAutomation(summary.taskId, "routed failed code review back to In Progress", {
+							summaryUpdatedAt: summary.updatedAt,
+							finalMessage: summary.latestHookActivity?.finalMessage ?? null,
+						});
+					}
+					continue;
+				}
+				if (!hasCodeReviewPassedSignalValue) {
+					logTestAutomation(summary.taskId, "waiting for explicit code-review result signal", {
+						summaryUpdatedAt: summary.updatedAt,
+						finalMessage: summary.latestHookActivity?.finalMessage ?? null,
+					});
+					continue;
+				}
 				const programmaticMoveAttempt = tryProgrammaticCardMove(summary.taskId, columnId, "review");
 				if (programmaticMoveAttempt === "started" || programmaticMoveAttempt === "blocked") {
-					logTestAutomation(summary.taskId, "moving task from Test to Review via programmatic move", {
+					logTestAutomation(summary.taskId, "moving task from Code Review to Review via programmatic move", {
 						summaryUpdatedAt: summary.updatedAt,
 						programmaticMoveAttempt,
 					});
@@ -633,7 +785,7 @@ export function useBoardInteractions({
 				if (moved.moved) {
 					nextBoard = moved.board;
 					boardChanged = true;
-					logTestAutomation(summary.taskId, "moved task from Test to Review", {
+					logTestAutomation(summary.taskId, "moved task from Code Review to Review", {
 						summaryUpdatedAt: summary.updatedAt,
 						finalMessage: summary.latestHookActivity?.finalMessage ?? null,
 					});
@@ -772,8 +924,98 @@ export function useBoardInteractions({
 				});
 			})();
 		}
+
+		const resolvedCodeReviewPromptTemplate = resolveCodeReviewPromptTemplate(codeReviewPromptTemplate);
+		for (const queued of queuedCodeReviewPrompts) {
+			if (processedCodeReviewPromptSessionVersionByTaskIdRef.current[queued.taskId] === queued.updatedAt) {
+				logTestAutomation(queued.taskId, "skipping duplicate queued code-review prompt", {
+					summaryUpdatedAt: queued.updatedAt,
+				});
+				continue;
+			}
+			processedCodeReviewPromptSessionVersionByTaskIdRef.current[queued.taskId] = queued.updatedAt;
+			void (async () => {
+				let lastMessage: string | undefined;
+				for (let attempt = 0; attempt < 3; attempt += 1) {
+					logTestAutomation(queued.taskId, "code-review prompt attempt", {
+						attempt: attempt + 1,
+						summaryUpdatedAt: queued.updatedAt,
+					});
+					const result = await sendAutomatedTaskPrompt(
+						queued.taskId,
+						resolvedCodeReviewPromptTemplate,
+						"code_review",
+					);
+					if (result) {
+						return;
+					}
+					lastMessage = "Could not run task code-review prompt.";
+					if (attempt < 2) {
+						await new Promise<void>((resolve) => {
+							window.setTimeout(resolve, 350);
+						});
+					}
+				}
+				if (processedCodeReviewPromptSessionVersionByTaskIdRef.current[queued.taskId] === queued.updatedAt) {
+					delete processedCodeReviewPromptSessionVersionByTaskIdRef.current[queued.taskId];
+				}
+				showAppToast({
+					intent: "danger",
+					icon: "warning-sign",
+					message: lastMessage ?? "Could not run task code-review prompt.",
+					timeout: 7000,
+				});
+			})();
+		}
+
+		const resolvedCodeReviewFailurePromptTemplate = resolveCodeReviewFailurePromptTemplate(
+			codeReviewFailurePromptTemplate,
+		);
+		for (const queued of queuedCodeReviewFailurePrompts) {
+			if (processedCodeReviewFailurePromptSessionVersionByTaskIdRef.current[queued.taskId] === queued.updatedAt) {
+				logTestAutomation(queued.taskId, "skipping duplicate queued code-review failure prompt", {
+					summaryUpdatedAt: queued.updatedAt,
+				});
+				continue;
+			}
+			processedCodeReviewFailurePromptSessionVersionByTaskIdRef.current[queued.taskId] = queued.updatedAt;
+			void (async () => {
+				let lastMessage: string | undefined;
+				for (let attempt = 0; attempt < 3; attempt += 1) {
+					logTestAutomation(queued.taskId, "code-review failure prompt attempt", {
+						attempt: attempt + 1,
+						summaryUpdatedAt: queued.updatedAt,
+					});
+					const result = await sendAutomatedTaskPrompt(
+						queued.taskId,
+						resolvedCodeReviewFailurePromptTemplate,
+						"code_review_failure",
+					);
+					if (result) {
+						return;
+					}
+					lastMessage = "Could not send code-review follow-up prompt.";
+					if (attempt < 2) {
+						await new Promise<void>((resolve) => {
+							window.setTimeout(resolve, 350);
+						});
+					}
+				}
+				if (processedCodeReviewFailurePromptSessionVersionByTaskIdRef.current[queued.taskId] === queued.updatedAt) {
+					delete processedCodeReviewFailurePromptSessionVersionByTaskIdRef.current[queued.taskId];
+				}
+				showAppToast({
+					intent: "danger",
+					icon: "warning-sign",
+					message: lastMessage ?? "Could not send code-review follow-up prompt.",
+					timeout: 7000,
+				});
+			})();
+		}
 	}, [
 		board,
+		codeReviewFailurePromptTemplate,
+		codeReviewPromptTemplate,
 		programmaticCardMoveCycle,
 		sessions,
 		sendTaskSessionInput,
@@ -1148,6 +1390,10 @@ export function useBoardInteractions({
 		processedTestPromptSessionVersionByTaskIdRef.current = {};
 		handledTestFailureSessionVersionByTaskIdRef.current = {};
 		processedTestFailurePromptSessionVersionByTaskIdRef.current = {};
+		enteredCodeReviewSessionVersionByTaskIdRef.current = {};
+		processedCodeReviewPromptSessionVersionByTaskIdRef.current = {};
+		handledCodeReviewFailureSessionVersionByTaskIdRef.current = {};
+		processedCodeReviewFailurePromptSessionVersionByTaskIdRef.current = {};
 		setMoveToTrashLoadingById({});
 		for (const taskId of Object.keys(pendingProgrammaticStartMoveCompletionByTaskIdRef.current)) {
 			resolvePendingProgrammaticStartMove(taskId, false);

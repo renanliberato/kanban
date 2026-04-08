@@ -96,6 +96,7 @@ function createEmptyProjectTaskCounts(): RuntimeProjectTaskCounts {
 		backlog: 0,
 		in_progress: 0,
 		test: 0,
+		code_review: 0,
 		review: 0,
 		trash: 0,
 	};
@@ -114,6 +115,9 @@ function countTasksByColumn(board: RuntimeBoardData): RuntimeProjectTaskCounts {
 				break;
 			case "test":
 				counts.test += count;
+				break;
+			case "code_review":
+				counts.code_review += count;
 				break;
 			case "review":
 				counts.review += count;

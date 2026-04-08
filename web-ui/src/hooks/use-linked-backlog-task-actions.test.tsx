@@ -37,6 +37,7 @@ function createBoard(dependencies: BoardDependency[] = []): BoardData {
 			},
 			{ id: "in_progress", title: "In Progress", cards: [] },
 			{ id: "test", title: "Test", cards: [] },
+			{ id: "code_review", title: "Code Review", cards: [] },
 			{
 				id: "review",
 				title: "Review",
