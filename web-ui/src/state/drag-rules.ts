@@ -1,3 +1,11 @@
+import {
+	BACKLOG_COLUMN_ID,
+	IN_PROGRESS_COLUMN_ID,
+	isStageColumnId,
+	isTaskWorkspaceColumnId,
+	REVIEW_COLUMN_ID,
+	TRASH_COLUMN_ID,
+} from "@runtime-board-columns";
 import type { BoardColumn, BoardColumnId } from "@/types";
 
 export interface ProgrammaticCardMoveInFlight {
@@ -30,19 +38,16 @@ export function isAllowedCrossColumnCardMove(
 		programmaticCardMoveInFlight?: ProgrammaticCardMoveInFlight | null;
 	},
 ): boolean {
-	if (fromColumnId === "backlog" && toColumnId === "in_progress") {
+	if (fromColumnId === BACKLOG_COLUMN_ID && toColumnId === IN_PROGRESS_COLUMN_ID) {
 		return true;
 	}
-	if (toColumnId === "trash" && fromColumnId !== "trash") {
+	if (toColumnId === TRASH_COLUMN_ID && fromColumnId !== TRASH_COLUMN_ID) {
 		return true;
 	}
-	if (fromColumnId === "trash" && toColumnId === "review") {
+	if (fromColumnId === TRASH_COLUMN_ID && toColumnId === REVIEW_COLUMN_ID) {
 		return true;
 	}
-	if (
-		(fromColumnId === "in_progress" && toColumnId === "review") ||
-		(fromColumnId === "review" && toColumnId === "in_progress")
-	) {
+	if (isTaskWorkspaceColumnId(fromColumnId) && isTaskWorkspaceColumnId(toColumnId)) {
 		return isMatchingProgrammaticCardMove(
 			options?.taskId,
 			fromColumnId,
@@ -73,17 +78,17 @@ export function isCardDropDisabled(
 	if (!activeDragSourceColumnId) {
 		return false;
 	}
-	if (columnId === "review") {
+	if (isStageColumnId(columnId) || columnId === REVIEW_COLUMN_ID) {
 		return !isAllowedCrossColumnCardMove(activeDragSourceColumnId, columnId, {
 			taskId: options?.activeDragTaskId,
 			programmaticCardMoveInFlight: options?.programmaticCardMoveInFlight,
 		});
 	}
-	if (columnId === "backlog") {
-		return activeDragSourceColumnId !== "backlog";
+	if (columnId === BACKLOG_COLUMN_ID) {
+		return activeDragSourceColumnId !== BACKLOG_COLUMN_ID;
 	}
-	if (columnId === "in_progress") {
-		if (activeDragSourceColumnId === "backlog" || activeDragSourceColumnId === "in_progress") {
+	if (columnId === IN_PROGRESS_COLUMN_ID) {
+		if (activeDragSourceColumnId === BACKLOG_COLUMN_ID || activeDragSourceColumnId === IN_PROGRESS_COLUMN_ID) {
 			return false;
 		}
 		return !isAllowedCrossColumnCardMove(activeDragSourceColumnId, columnId, {
@@ -91,8 +96,8 @@ export function isCardDropDisabled(
 			programmaticCardMoveInFlight: options?.programmaticCardMoveInFlight,
 		});
 	}
-	if (columnId === "trash") {
-		return activeDragSourceColumnId === "trash";
+	if (columnId === TRASH_COLUMN_ID) {
+		return activeDragSourceColumnId === TRASH_COLUMN_ID;
 	}
 	return false;
 }

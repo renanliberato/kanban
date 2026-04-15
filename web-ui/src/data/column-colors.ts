@@ -1,13 +1,20 @@
-export const columnIndicatorColors: Record<string, string> = {
-	backlog: "var(--color-text-primary)",
-	in_progress: "var(--color-accent)",
-	review: "var(--color-accent-2)",
-	trash: "var(--color-status-red)",
+import { type BoardColumnTone, getBoardColumnDefinitions } from "@runtime-board-columns";
+
+const columnIndicatorColorByTone: Record<BoardColumnTone, string> = {
+	default: "var(--color-text-primary)",
+	accent: "var(--color-accent)",
+	blue: "var(--color-status-blue)",
+	green: "var(--color-status-green)",
+	orange: "var(--color-status-orange)",
+	purple: "var(--color-status-purple)",
+	red: "var(--color-status-red)",
+	gold: "var(--color-status-gold)",
 };
 
-export const columnBackgroundColors: Record<string, string> = {
-	backlog: "var(--color-surface-0)",
-	in_progress: "var(--color-surface-0)",
-	review: "var(--color-surface-0)",
-	trash: "var(--color-surface-0)",
-};
+export const columnIndicatorColors: Record<string, string> = Object.fromEntries(
+	getBoardColumnDefinitions().map((column) => [column.id, columnIndicatorColorByTone[column.tone]]),
+);
+
+export const columnBackgroundColors: Record<string, string> = Object.fromEntries(
+	getBoardColumnDefinitions().map((column) => [column.id, "var(--color-surface-0)"]),
+);

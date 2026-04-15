@@ -1,4 +1,5 @@
 import type { DropResult } from "@hello-pangea/dnd";
+import { isTaskWorkspaceColumnId } from "@runtime-board-columns";
 import {
 	Files,
 	GitCompareArrows,
@@ -540,8 +541,8 @@ export function CardDetailView({
 	const detailDiffFileTreePanelPercent = `${(detailDiffFileTreeRatio * 100).toFixed(1)}%`;
 	const detailDiffContentPanelPercent = `${((1 - detailDiffFileTreeRatio) * 100).toFixed(1)}%`;
 	const detailDiffFileTreePanelFlex = `0 0 ${detailDiffFileTreePanelPercent}`;
-	const showMoveToTrashActions = selection.column.id === "review" || selection.column.id === "in_progress";
-	const isTaskTerminalEnabled = selection.column.id === "in_progress" || selection.column.id === "review";
+	const showMoveToTrashActions = isTaskWorkspaceColumnId(selection.column.id);
+	const isTaskTerminalEnabled = isTaskWorkspaceColumnId(selection.column.id);
 	const effectiveTaskAgentId = sessionSummary?.agentId ?? selection.card.agentId ?? selectedAgentId;
 	const showClineAgentChatPanel = isNativeClineAgentSelected(effectiveTaskAgentId);
 	const availablePaths = useMemo(() => {

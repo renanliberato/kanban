@@ -5,7 +5,15 @@ import { readFile, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { getRuntimeAgentCatalogEntry, isRuntimeAgentLaunchSupported } from "../core/agent-catalog";
-import type { RuntimeAgentId, RuntimeProjectShortcut } from "../core/api-contract";
+import type { RuntimeAgentId, RuntimeProjectShortcut, RuntimeStageAutomationPromptConfig } from "../core/api-contract";
+import {
+	type BoardColumnDefinition,
+	getAutomatedBoardStageColumnDefinitions,
+	getNextWorkflowColumnId,
+	IN_PROGRESS_COLUMN_ID,
+	normalizeBoardColumnId,
+	REVIEW_COLUMN_ID,
+} from "../core/board-columns";
 import { type LockRequest, lockedFileSystem } from "../fs/locked-file-system";
 import { detectInstalledCommands } from "../terminal/agent-registry";
 import { areRuntimeProjectShortcutsEqual } from "./shortcut-utils";
@@ -17,11 +25,15 @@ interface RuntimeGlobalConfigFileShape {
 	readyForReviewNotificationsEnabled?: boolean;
 	commitPromptTemplate?: string;
 	openPrPromptTemplate?: string;
+	stagePromptTemplates?: Record<string, unknown>;
+	stageFailurePromptTemplates?: Record<string, unknown>;
 }
 
 interface RuntimeProjectConfigFileShape {
 	shortcuts?: RuntimeProjectShortcut[];
 }
+
+type RuntimeGlobalConfigFileShapeWithLegacy = RuntimeGlobalConfigFileShape & Record<string, unknown>;
 
 export interface RuntimeConfigState {
 	globalConfigPath: string;
@@ -33,6 +45,9 @@ export interface RuntimeConfigState {
 	shortcuts: RuntimeProjectShortcut[];
 	commitPromptTemplate: string;
 	openPrPromptTemplate: string;
+	stagePromptTemplates: Record<string, string>;
+	stageFailurePromptTemplates: Record<string, string>;
+	stageAutomationPrompts: RuntimeStageAutomationPromptConfig[];
 	commitPromptTemplateDefault: string;
 	openPrPromptTemplateDefault: string;
 }
@@ -45,6 +60,8 @@ export interface RuntimeConfigUpdateInput {
 	shortcuts?: RuntimeProjectShortcut[];
 	commitPromptTemplate?: string;
 	openPrPromptTemplate?: string;
+	stagePromptTemplates?: Record<string, string>;
+	stageFailurePromptTemplates?: Record<string, string>;
 }
 
 const RUNTIME_HOME_PARENT_DIR = ".cline";
@@ -178,6 +195,140 @@ function normalizePromptTemplate(value: unknown, fallback: string): string {
 	return normalized.length > 0 ? value : fallback;
 }
 
+function normalizePromptTemplateMap(value: unknown): Record<string, string> {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		return {};
+	}
+	const templates: Record<string, string> = {};
+	for (const [columnId, template] of Object.entries(value)) {
+		const normalizedColumnId = normalizeBoardColumnId(columnId);
+		if (!normalizedColumnId || typeof template !== "string") {
+			continue;
+		}
+		templates[normalizedColumnId] = template;
+	}
+	return templates;
+}
+
+function arePromptTemplateMapsEqual(left: Record<string, string>, right: Record<string, string>): boolean {
+	const leftKeys = Object.keys(left).sort();
+	const rightKeys = Object.keys(right).sort();
+	if (leftKeys.length !== rightKeys.length) {
+		return false;
+	}
+	return leftKeys.every((key, index) => key === rightKeys[index] && left[key] === right[key]);
+}
+
+function readConfigString(
+	config: RuntimeGlobalConfigFileShapeWithLegacy | null,
+	key: string | undefined,
+): string | null {
+	if (!config || !key) {
+		return null;
+	}
+	const value = config[key];
+	return typeof value === "string" ? value : null;
+}
+
+function resolveStagePassTargetColumnId(definition: BoardColumnDefinition): string {
+	const targetColumnId =
+		normalizeBoardColumnId(definition.automation?.passTargetColumnId) ??
+		normalizeBoardColumnId(getNextWorkflowColumnId(definition.id)) ??
+		REVIEW_COLUMN_ID;
+	return targetColumnId;
+}
+
+function resolveStageFailTargetColumnId(definition: BoardColumnDefinition): string {
+	return normalizeBoardColumnId(definition.automation?.failTargetColumnId) ?? IN_PROGRESS_COLUMN_ID;
+}
+
+function buildStageAutomationPrompts(
+	globalConfig: RuntimeGlobalConfigFileShapeWithLegacy | null,
+): RuntimeStageAutomationPromptConfig[] {
+	const promptTemplates = normalizePromptTemplateMap(globalConfig?.stagePromptTemplates);
+	const failurePromptTemplates = normalizePromptTemplateMap(globalConfig?.stageFailurePromptTemplates);
+	const prompts: RuntimeStageAutomationPromptConfig[] = [];
+	for (const definition of getAutomatedBoardStageColumnDefinitions()) {
+		const automation = definition.automation;
+		if (!automation) {
+			continue;
+		}
+		const promptTemplate = normalizePromptTemplate(
+			promptTemplates[definition.id] ?? readConfigString(globalConfig, automation.legacyPromptTemplateKey),
+			automation.promptTemplateDefault,
+		);
+		const failurePromptTemplate = normalizePromptTemplate(
+			failurePromptTemplates[definition.id] ??
+				readConfigString(globalConfig, automation.legacyFailurePromptTemplateKey),
+			automation.failurePromptTemplateDefault,
+		);
+		prompts.push({
+			columnId: definition.id,
+			title: definition.title,
+			promptTemplate,
+			failurePromptTemplate,
+			promptTemplateDefault: automation.promptTemplateDefault,
+			failurePromptTemplateDefault: automation.failurePromptTemplateDefault,
+			passSignal: automation.passSignal,
+			failSignal: automation.failSignal,
+			passTargetColumnId: resolveStagePassTargetColumnId(definition),
+			failTargetColumnId: resolveStageFailTargetColumnId(definition),
+		});
+	}
+	return prompts;
+}
+
+function stagePromptTemplatesFromConfigs(
+	stageAutomationPrompts: readonly RuntimeStageAutomationPromptConfig[],
+	kind: "entry" | "failure",
+): Record<string, string> {
+	const templates: Record<string, string> = {};
+	for (const promptConfig of stageAutomationPrompts) {
+		templates[promptConfig.columnId] =
+			kind === "entry" ? promptConfig.promptTemplate : promptConfig.failurePromptTemplate;
+	}
+	return templates;
+}
+
+function buildStagePromptTemplatePayload(input: {
+	templates: Record<string, string> | undefined;
+	existingTemplates: Record<string, string>;
+	defaultsByColumnId: Map<string, string>;
+}): Record<string, string> | undefined {
+	const payload: Record<string, string> = {};
+	for (const definition of getAutomatedBoardStageColumnDefinitions()) {
+		const automation = definition.automation;
+		if (!automation) {
+			continue;
+		}
+		const defaultTemplate = input.defaultsByColumnId.get(definition.id);
+		if (defaultTemplate === undefined) {
+			continue;
+		}
+		const existingTemplate = input.existingTemplates[definition.id];
+		const template = normalizePromptTemplate(input.templates?.[definition.id], defaultTemplate);
+		if (existingTemplate !== undefined || template !== defaultTemplate) {
+			payload[definition.id] = template;
+		}
+	}
+	return Object.keys(payload).length > 0 ? payload : undefined;
+}
+
+function getStagePromptDefaultsByColumnId(kind: "entry" | "failure"): Map<string, string> {
+	const defaults = new Map<string, string>();
+	for (const definition of getAutomatedBoardStageColumnDefinitions()) {
+		const automation = definition.automation;
+		if (!automation) {
+			continue;
+		}
+		defaults.set(
+			definition.id,
+			kind === "entry" ? automation.promptTemplateDefault : automation.failurePromptTemplateDefault,
+		);
+	}
+	return defaults;
+}
+
 function normalizeBoolean(value: unknown, fallback: boolean): boolean {
 	if (typeof value === "boolean") {
 		return value;
@@ -267,9 +418,10 @@ function toRuntimeConfigState({
 }: {
 	globalConfigPath: string;
 	projectConfigPath: string | null;
-	globalConfig: RuntimeGlobalConfigFileShape | null;
+	globalConfig: RuntimeGlobalConfigFileShapeWithLegacy | null;
 	projectConfig: RuntimeProjectConfigFileShape | null;
 }): RuntimeConfigState {
+	const stageAutomationPrompts = buildStageAutomationPrompts(globalConfig);
 	return {
 		globalConfigPath,
 		projectConfigPath,
@@ -289,6 +441,9 @@ function toRuntimeConfigState({
 			globalConfig?.openPrPromptTemplate,
 			DEFAULT_OPEN_PR_PROMPT_TEMPLATE,
 		),
+		stagePromptTemplates: stagePromptTemplatesFromConfigs(stageAutomationPrompts, "entry"),
+		stageFailurePromptTemplates: stagePromptTemplatesFromConfigs(stageAutomationPrompts, "failure"),
+		stageAutomationPrompts,
 		commitPromptTemplateDefault: DEFAULT_COMMIT_PROMPT_TEMPLATE,
 		openPrPromptTemplateDefault: DEFAULT_OPEN_PR_PROMPT_TEMPLATE,
 	};
@@ -312,9 +467,11 @@ async function writeRuntimeGlobalConfigFile(
 		readyForReviewNotificationsEnabled?: boolean;
 		commitPromptTemplate?: string;
 		openPrPromptTemplate?: string;
+		stagePromptTemplates?: Record<string, string>;
+		stageFailurePromptTemplates?: Record<string, string>;
 	},
 ): Promise<void> {
-	const existing = await readRuntimeConfigFile<RuntimeGlobalConfigFileShape>(configPath);
+	const existing = await readRuntimeConfigFile<RuntimeGlobalConfigFileShapeWithLegacy>(configPath);
 	const selectedAgentId = config.selectedAgentId === undefined ? undefined : normalizeAgentId(config.selectedAgentId);
 	const existingSelectedAgentId = hasOwnKey(existing, "selectedAgentId")
 		? normalizeAgentId(existing?.selectedAgentId)
@@ -340,6 +497,18 @@ async function writeRuntimeGlobalConfigFile(
 		config.openPrPromptTemplate === undefined
 			? DEFAULT_OPEN_PR_PROMPT_TEMPLATE
 			: normalizePromptTemplate(config.openPrPromptTemplate, DEFAULT_OPEN_PR_PROMPT_TEMPLATE);
+	const existingStagePromptTemplates = normalizePromptTemplateMap(existing?.stagePromptTemplates);
+	const existingStageFailurePromptTemplates = normalizePromptTemplateMap(existing?.stageFailurePromptTemplates);
+	const stagePromptTemplates = buildStagePromptTemplatePayload({
+		templates: config.stagePromptTemplates,
+		existingTemplates: existingStagePromptTemplates,
+		defaultsByColumnId: getStagePromptDefaultsByColumnId("entry"),
+	});
+	const stageFailurePromptTemplates = buildStagePromptTemplatePayload({
+		templates: config.stageFailurePromptTemplates,
+		existingTemplates: existingStageFailurePromptTemplates,
+		defaultsByColumnId: getStagePromptDefaultsByColumnId("failure"),
+	});
 
 	const payload: RuntimeGlobalConfigFileShape = {};
 	if (selectedAgentId !== undefined) {
@@ -373,6 +542,12 @@ async function writeRuntimeGlobalConfigFile(
 	}
 	if (hasOwnKey(existing, "openPrPromptTemplate") || openPrPromptTemplate !== DEFAULT_OPEN_PR_PROMPT_TEMPLATE) {
 		payload.openPrPromptTemplate = openPrPromptTemplate;
+	}
+	if (hasOwnKey(existing, "stagePromptTemplates") || stagePromptTemplates !== undefined) {
+		payload.stagePromptTemplates = stagePromptTemplates ?? {};
+	}
+	if (hasOwnKey(existing, "stageFailurePromptTemplates") || stageFailurePromptTemplates !== undefined) {
+		payload.stageFailurePromptTemplates = stageFailurePromptTemplates ?? {};
 	}
 
 	await lockedFileSystem.writeJsonFileAtomic(configPath, payload, {
@@ -414,7 +589,7 @@ async function writeRuntimeProjectConfigFile(
 interface RuntimeConfigFiles {
 	globalConfigPath: string;
 	projectConfigPath: string | null;
-	globalConfig: RuntimeGlobalConfigFileShape | null;
+	globalConfig: RuntimeGlobalConfigFileShapeWithLegacy | null;
 	projectConfig: RuntimeProjectConfigFileShape | null;
 }
 
@@ -423,7 +598,7 @@ async function readRuntimeConfigFiles(cwd: string | null): Promise<RuntimeConfig
 	return {
 		globalConfigPath,
 		projectConfigPath,
-		globalConfig: await readRuntimeConfigFile<RuntimeGlobalConfigFileShape>(globalConfigPath),
+		globalConfig: await readRuntimeConfigFile<RuntimeGlobalConfigFileShapeWithLegacy>(globalConfigPath),
 		projectConfig: projectConfigPath
 			? await readRuntimeConfigFile<RuntimeProjectConfigFileShape>(projectConfigPath)
 			: null,
@@ -456,7 +631,14 @@ function createRuntimeConfigStateFromValues(input: {
 	shortcuts: RuntimeProjectShortcut[];
 	commitPromptTemplate: string;
 	openPrPromptTemplate: string;
+	stagePromptTemplates?: Record<string, string>;
+	stageFailurePromptTemplates?: Record<string, string>;
 }): RuntimeConfigState {
+	const syntheticGlobalConfig: RuntimeGlobalConfigFileShapeWithLegacy = {
+		stagePromptTemplates: input.stagePromptTemplates,
+		stageFailurePromptTemplates: input.stageFailurePromptTemplates,
+	};
+	const stageAutomationPrompts = buildStageAutomationPrompts(syntheticGlobalConfig);
 	return {
 		globalConfigPath: input.globalConfigPath,
 		projectConfigPath: input.projectConfigPath,
@@ -473,6 +655,9 @@ function createRuntimeConfigStateFromValues(input: {
 		shortcuts: normalizeShortcuts(input.shortcuts),
 		commitPromptTemplate: normalizePromptTemplate(input.commitPromptTemplate, DEFAULT_COMMIT_PROMPT_TEMPLATE),
 		openPrPromptTemplate: normalizePromptTemplate(input.openPrPromptTemplate, DEFAULT_OPEN_PR_PROMPT_TEMPLATE),
+		stagePromptTemplates: stagePromptTemplatesFromConfigs(stageAutomationPrompts, "entry"),
+		stageFailurePromptTemplates: stagePromptTemplatesFromConfigs(stageAutomationPrompts, "failure"),
+		stageAutomationPrompts,
 		commitPromptTemplateDefault: DEFAULT_COMMIT_PROMPT_TEMPLATE,
 		openPrPromptTemplateDefault: DEFAULT_OPEN_PR_PROMPT_TEMPLATE,
 	};
@@ -489,6 +674,8 @@ export function toGlobalRuntimeConfigState(current: RuntimeConfigState): Runtime
 		shortcuts: [],
 		commitPromptTemplate: current.commitPromptTemplate,
 		openPrPromptTemplate: current.openPrPromptTemplate,
+		stagePromptTemplates: current.stagePromptTemplates,
+		stageFailurePromptTemplates: current.stageFailurePromptTemplates,
 	});
 }
 
@@ -524,6 +711,8 @@ export async function saveRuntimeConfig(
 		shortcuts: RuntimeProjectShortcut[];
 		commitPromptTemplate: string;
 		openPrPromptTemplate: string;
+		stagePromptTemplates?: Record<string, string>;
+		stageFailurePromptTemplates?: Record<string, string>;
 	},
 ): Promise<RuntimeConfigState> {
 	const { globalConfigPath, projectConfigPath } = resolveRuntimeConfigPaths(cwd);
@@ -535,6 +724,8 @@ export async function saveRuntimeConfig(
 			readyForReviewNotificationsEnabled: config.readyForReviewNotificationsEnabled,
 			commitPromptTemplate: config.commitPromptTemplate,
 			openPrPromptTemplate: config.openPrPromptTemplate,
+			stagePromptTemplates: config.stagePromptTemplates,
+			stageFailurePromptTemplates: config.stageFailurePromptTemplates,
 		});
 		await writeRuntimeProjectConfigFile(projectConfigPath, { shortcuts: config.shortcuts });
 		return createRuntimeConfigStateFromValues({
@@ -547,6 +738,8 @@ export async function saveRuntimeConfig(
 			shortcuts: config.shortcuts,
 			commitPromptTemplate: config.commitPromptTemplate,
 			openPrPromptTemplate: config.openPrPromptTemplate,
+			stagePromptTemplates: config.stagePromptTemplates,
+			stageFailurePromptTemplates: config.stageFailurePromptTemplates,
 		});
 	});
 }
@@ -568,6 +761,8 @@ export async function updateRuntimeConfig(cwd: string, updates: RuntimeConfigUpd
 			shortcuts: projectConfigPath ? (updates.shortcuts ?? current.shortcuts) : current.shortcuts,
 			commitPromptTemplate: updates.commitPromptTemplate ?? current.commitPromptTemplate,
 			openPrPromptTemplate: updates.openPrPromptTemplate ?? current.openPrPromptTemplate,
+			stagePromptTemplates: updates.stagePromptTemplates ?? current.stagePromptTemplates,
+			stageFailurePromptTemplates: updates.stageFailurePromptTemplates ?? current.stageFailurePromptTemplates,
 		};
 
 		const hasChanges =
@@ -577,6 +772,8 @@ export async function updateRuntimeConfig(cwd: string, updates: RuntimeConfigUpd
 			nextConfig.readyForReviewNotificationsEnabled !== current.readyForReviewNotificationsEnabled ||
 			nextConfig.commitPromptTemplate !== current.commitPromptTemplate ||
 			nextConfig.openPrPromptTemplate !== current.openPrPromptTemplate ||
+			!arePromptTemplateMapsEqual(nextConfig.stagePromptTemplates, current.stagePromptTemplates) ||
+			!arePromptTemplateMapsEqual(nextConfig.stageFailurePromptTemplates, current.stageFailurePromptTemplates) ||
 			!areRuntimeProjectShortcutsEqual(nextConfig.shortcuts, current.shortcuts);
 
 		if (!hasChanges) {
@@ -590,6 +787,8 @@ export async function updateRuntimeConfig(cwd: string, updates: RuntimeConfigUpd
 			readyForReviewNotificationsEnabled: nextConfig.readyForReviewNotificationsEnabled,
 			commitPromptTemplate: nextConfig.commitPromptTemplate,
 			openPrPromptTemplate: nextConfig.openPrPromptTemplate,
+			stagePromptTemplates: nextConfig.stagePromptTemplates,
+			stageFailurePromptTemplates: nextConfig.stageFailurePromptTemplates,
 		});
 		await writeRuntimeProjectConfigFile(projectConfigPath, {
 			shortcuts: nextConfig.shortcuts,
@@ -604,6 +803,8 @@ export async function updateRuntimeConfig(cwd: string, updates: RuntimeConfigUpd
 			shortcuts: nextConfig.shortcuts,
 			commitPromptTemplate: nextConfig.commitPromptTemplate,
 			openPrPromptTemplate: nextConfig.openPrPromptTemplate,
+			stagePromptTemplates: nextConfig.stagePromptTemplates,
+			stageFailurePromptTemplates: nextConfig.stageFailurePromptTemplates,
 		});
 	});
 }
@@ -633,6 +834,8 @@ export async function updateGlobalRuntimeConfig(
 				shortcuts: current.shortcuts,
 				commitPromptTemplate: updates.commitPromptTemplate ?? current.commitPromptTemplate,
 				openPrPromptTemplate: updates.openPrPromptTemplate ?? current.openPrPromptTemplate,
+				stagePromptTemplates: updates.stagePromptTemplates ?? current.stagePromptTemplates,
+				stageFailurePromptTemplates: updates.stageFailurePromptTemplates ?? current.stageFailurePromptTemplates,
 			};
 
 			const hasChanges =
@@ -641,7 +844,9 @@ export async function updateGlobalRuntimeConfig(
 				nextConfig.agentAutonomousModeEnabled !== current.agentAutonomousModeEnabled ||
 				nextConfig.readyForReviewNotificationsEnabled !== current.readyForReviewNotificationsEnabled ||
 				nextConfig.commitPromptTemplate !== current.commitPromptTemplate ||
-				nextConfig.openPrPromptTemplate !== current.openPrPromptTemplate;
+				nextConfig.openPrPromptTemplate !== current.openPrPromptTemplate ||
+				!arePromptTemplateMapsEqual(nextConfig.stagePromptTemplates, current.stagePromptTemplates) ||
+				!arePromptTemplateMapsEqual(nextConfig.stageFailurePromptTemplates, current.stageFailurePromptTemplates);
 
 			if (!hasChanges) {
 				return current;
@@ -654,6 +859,8 @@ export async function updateGlobalRuntimeConfig(
 				readyForReviewNotificationsEnabled: nextConfig.readyForReviewNotificationsEnabled,
 				commitPromptTemplate: nextConfig.commitPromptTemplate,
 				openPrPromptTemplate: nextConfig.openPrPromptTemplate,
+				stagePromptTemplates: nextConfig.stagePromptTemplates,
+				stageFailurePromptTemplates: nextConfig.stageFailurePromptTemplates,
 			});
 
 			return createRuntimeConfigStateFromValues({
@@ -666,6 +873,8 @@ export async function updateGlobalRuntimeConfig(
 				shortcuts: nextConfig.shortcuts,
 				commitPromptTemplate: nextConfig.commitPromptTemplate,
 				openPrPromptTemplate: nextConfig.openPrPromptTemplate,
+				stagePromptTemplates: nextConfig.stagePromptTemplates,
+				stageFailurePromptTemplates: nextConfig.stageFailurePromptTemplates,
 			});
 		},
 	);

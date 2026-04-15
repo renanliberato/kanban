@@ -58,6 +58,7 @@ function createRuntimeConfigResponse(selectedAgentId: RuntimeConfigResponse["sel
 		},
 		commitPromptTemplate: "",
 		openPrPromptTemplate: "",
+		stageAutomationPrompts: [],
 		commitPromptTemplateDefault: "",
 		openPrPromptTemplateDefault: "",
 	};

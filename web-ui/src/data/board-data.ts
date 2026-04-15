@@ -1,11 +1,5 @@
+import { getBoardColumnDefinitions } from "@runtime-board-columns";
 import type { BoardColumn, BoardColumnId, BoardData } from "@/types";
-
-const columnOrder: Array<{ id: BoardColumnId; title: string }> = [
-	{ id: "backlog", title: "Backlog" },
-	{ id: "in_progress", title: "In Progress" },
-	{ id: "review", title: "Review" },
-	{ id: "trash", title: "Trash" },
-];
 
 function createEmptyColumn(id: BoardColumnId, title: string): BoardColumn {
 	return {
@@ -17,7 +11,7 @@ function createEmptyColumn(id: BoardColumnId, title: string): BoardColumn {
 
 export function createInitialBoardData(): BoardData {
 	return {
-		columns: columnOrder.map((column) => createEmptyColumn(column.id, column.title)),
+		columns: getBoardColumnDefinitions().map((column) => createEmptyColumn(column.id, column.title)),
 		dependencies: [],
 	};
 }

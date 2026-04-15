@@ -48,6 +48,7 @@ import type {
 	RuntimeClineMcpServerAuthStatus,
 	RuntimeConfigResponse,
 	RuntimeProjectShortcut,
+	RuntimeStageAutomationPromptConfig,
 } from "@/runtime/types";
 import { useRuntimeConfig } from "@/runtime/use-runtime-config";
 import {
@@ -83,6 +84,31 @@ function buildDisplayedAgentCommand(agentId: RuntimeAgentId, binary: string, aut
 
 function normalizeTemplateForComparison(value: string): string {
 	return value.replaceAll("\r\n", "\n").trim();
+}
+
+function getStagePromptTemplateMap(
+	stageAutomationPrompts: readonly RuntimeStageAutomationPromptConfig[],
+	kind: "entry" | "failure",
+): Record<string, string> {
+	const templates: Record<string, string> = {};
+	for (const promptConfig of stageAutomationPrompts) {
+		templates[promptConfig.columnId] =
+			kind === "entry" ? promptConfig.promptTemplate : promptConfig.failurePromptTemplate;
+	}
+	return templates;
+}
+
+function arePromptTemplateMapsEqual(left: Record<string, string>, right: Record<string, string>): boolean {
+	const leftKeys = Object.keys(left).sort();
+	const rightKeys = Object.keys(right).sort();
+	if (leftKeys.length !== rightKeys.length) {
+		return false;
+	}
+	return leftKeys.every(
+		(key, index) =>
+			key === rightKeys[index] &&
+			normalizeTemplateForComparison(left[key] ?? "") === normalizeTemplateForComparison(right[key] ?? ""),
+	);
 }
 
 const GIT_PROMPT_VARIANT_OPTIONS: Array<{ value: TaskGitAction; label: string }> = [
@@ -375,6 +401,8 @@ export function RuntimeSettingsDialog({
 	const [shortcuts, setShortcuts] = useState<RuntimeProjectShortcut[]>([]);
 	const [commitPromptTemplate, setCommitPromptTemplate] = useState("");
 	const [openPrPromptTemplate, setOpenPrPromptTemplate] = useState("");
+	const [stagePromptTemplates, setStagePromptTemplates] = useState<Record<string, string>>({});
+	const [stageFailurePromptTemplates, setStageFailurePromptTemplates] = useState<Record<string, string>>({});
 	const [selectedPromptVariant, setSelectedPromptVariant] = useState<TaskGitAction>("commit");
 	const [copiedVariableToken, setCopiedVariableToken] = useState<string | null>(null);
 	const [saveError, setSaveError] = useState<string | null>(null);
@@ -445,6 +473,14 @@ export function RuntimeSettingsDialog({
 	const initialShortcuts = config?.shortcuts ?? [];
 	const initialCommitPromptTemplate = config?.commitPromptTemplate ?? "";
 	const initialOpenPrPromptTemplate = config?.openPrPromptTemplate ?? "";
+	const initialStagePromptTemplates = useMemo(
+		() => getStagePromptTemplateMap(config?.stageAutomationPrompts ?? [], "entry"),
+		[config?.stageAutomationPrompts],
+	);
+	const initialStageFailurePromptTemplates = useMemo(
+		() => getStagePromptTemplateMap(config?.stageAutomationPrompts ?? [], "failure"),
+		[config?.stageAutomationPrompts],
+	);
 	const clineSettings = useRuntimeSettingsClineController({
 		open,
 		workspaceId,
@@ -488,9 +524,15 @@ export function RuntimeSettingsDialog({
 		) {
 			return true;
 		}
-		return (
+		if (
 			normalizeTemplateForComparison(openPrPromptTemplate) !==
 			normalizeTemplateForComparison(initialOpenPrPromptTemplate)
+		) {
+			return true;
+		}
+		return (
+			!arePromptTemplateMapsEqual(stagePromptTemplates, initialStagePromptTemplates) ||
+			!arePromptTemplateMapsEqual(stageFailurePromptTemplates, initialStageFailurePromptTemplates)
 		);
 	}, [
 		agentAutonomousModeEnabled,
@@ -504,12 +546,16 @@ export function RuntimeSettingsDialog({
 		initialOpenPrPromptTemplate,
 		initialReadyForReviewNotificationsEnabled,
 		initialSelectedAgentId,
+		initialStageFailurePromptTemplates,
+		initialStagePromptTemplates,
 		initialShortcuts,
 		initialThemeId,
 		openPrPromptTemplate,
 		readyForReviewNotificationsEnabled,
 		selectedAgentId,
 		shortcuts,
+		stageFailurePromptTemplates,
+		stagePromptTemplates,
 	]);
 
 	useEffect(() => {
@@ -522,6 +568,8 @@ export function RuntimeSettingsDialog({
 		setShortcuts(config?.shortcuts ?? []);
 		setCommitPromptTemplate(config?.commitPromptTemplate ?? "");
 		setOpenPrPromptTemplate(config?.openPrPromptTemplate ?? "");
+		setStagePromptTemplates(getStagePromptTemplateMap(config?.stageAutomationPrompts ?? [], "entry"));
+		setStageFailurePromptTemplates(getStagePromptTemplateMap(config?.stageAutomationPrompts ?? [], "failure"));
 		setSaveError(null);
 	}, [
 		config?.agentAutonomousModeEnabled,
@@ -529,6 +577,7 @@ export function RuntimeSettingsDialog({
 		config?.openPrPromptTemplate,
 		config?.readyForReviewNotificationsEnabled,
 		config?.selectedAgentId,
+		config?.stageAutomationPrompts,
 		config?.shortcuts,
 		fallbackAgentId,
 		open,
@@ -662,6 +711,20 @@ export function RuntimeSettingsDialog({
 		handleSelectedPromptChange(selectedPromptDefaultValue);
 	};
 
+	const handleStagePromptTemplateChange = (columnId: string, value: string) => {
+		setStagePromptTemplates((current) => ({
+			...current,
+			[columnId]: value,
+		}));
+	};
+
+	const handleStageFailurePromptTemplateChange = (columnId: string, value: string) => {
+		setStageFailurePromptTemplates((current) => ({
+			...current,
+			[columnId]: value,
+		}));
+	};
+
 	const handleSave = async () => {
 		setSaveError(null);
 		if (!config) {
@@ -704,6 +767,8 @@ export function RuntimeSettingsDialog({
 			shortcuts,
 			commitPromptTemplate,
 			openPrPromptTemplate,
+			stagePromptTemplates,
+			stageFailurePromptTemplates,
 		});
 		if (!saved) {
 			setSaveError("Could not save runtime settings. Check runtime logs and try again.");
@@ -905,6 +970,94 @@ export function RuntimeSettingsDialog({
 							/>{" "}
 							to reference {TASK_GIT_BASE_REF_PROMPT_VARIABLE.description}
 						</p>
+						{(config?.stageAutomationPrompts ?? []).length > 0 ? (
+							<>
+								<h6 className="font-semibold text-text-primary mt-4 mb-1">Stage automation prompts</h6>
+								<p className="text-text-secondary text-[13px] mt-0 mb-2">
+									Prompts sent when tasks enter automated board columns.
+								</p>
+								{(config?.stageAutomationPrompts ?? []).map((promptConfig) => {
+									const stagePromptTemplate =
+										stagePromptTemplates[promptConfig.columnId] ?? promptConfig.promptTemplate;
+									const stageFailurePromptTemplate =
+										stageFailurePromptTemplates[promptConfig.columnId] ??
+										promptConfig.failurePromptTemplate;
+									return (
+										<div key={promptConfig.columnId} className="mt-3">
+											<div className="flex items-center justify-between gap-2 mb-1">
+												<span className="text-[12px] text-text-secondary">
+													{promptConfig.title} prompt
+												</span>
+												<Button
+													variant="ghost"
+													size="sm"
+													onClick={() =>
+														handleStagePromptTemplateChange(
+															promptConfig.columnId,
+															promptConfig.promptTemplateDefault,
+														)
+													}
+													disabled={
+														controlsDisabled ||
+														normalizeTemplateForComparison(stagePromptTemplate) ===
+															normalizeTemplateForComparison(promptConfig.promptTemplateDefault)
+													}
+												>
+													Reset
+												</Button>
+											</div>
+											<textarea
+												rows={5}
+												value={stagePromptTemplate}
+												onChange={(event) =>
+													handleStagePromptTemplateChange(promptConfig.columnId, event.target.value)
+												}
+												placeholder={`Prompt used when a task enters ${promptConfig.title}.`}
+												disabled={controlsDisabled}
+												className="w-full rounded-md border border-border bg-surface-2 p-3 text-[13px] text-text-primary font-mono placeholder:text-text-tertiary focus:border-border-focus focus:outline-none resize-none disabled:opacity-40"
+											/>
+
+											<div className="flex items-center justify-between gap-2 mt-3 mb-1">
+												<span className="text-[12px] text-text-secondary">
+													{promptConfig.title} failure follow-up prompt
+												</span>
+												<Button
+													variant="ghost"
+													size="sm"
+													onClick={() =>
+														handleStageFailurePromptTemplateChange(
+															promptConfig.columnId,
+															promptConfig.failurePromptTemplateDefault,
+														)
+													}
+													disabled={
+														controlsDisabled ||
+														normalizeTemplateForComparison(stageFailurePromptTemplate) ===
+															normalizeTemplateForComparison(promptConfig.failurePromptTemplateDefault)
+													}
+												>
+													Reset
+												</Button>
+											</div>
+											<textarea
+												rows={5}
+												value={stageFailurePromptTemplate}
+												onChange={(event) =>
+													handleStageFailurePromptTemplateChange(promptConfig.columnId, event.target.value)
+												}
+												placeholder={`Prompt sent after ${promptConfig.title} fails.`}
+												disabled={controlsDisabled}
+												className="w-full rounded-md border border-border bg-surface-2 p-3 text-[13px] text-text-primary font-mono placeholder:text-text-tertiary focus:border-border-focus focus:outline-none resize-none disabled:opacity-40"
+											/>
+											<p className="text-text-secondary text-[12px] mt-1 mb-0">
+												Pass: <span className="font-mono">{promptConfig.passSignal}</span>. Failure:{" "}
+												<span className="font-mono">{promptConfig.failSignal}</span>.
+											</p>
+										</div>
+									);
+								})}
+							</>
+						) : null}
 					</div>
 
 					{/* ---- Notifications ---- */}

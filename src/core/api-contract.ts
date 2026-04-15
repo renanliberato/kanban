@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isBoardColumnId } from "./board-columns";
 import { resolveTaskTitle } from "./task-title.js";
 
 export const runtimeWorkspaceFileStatusSchema = z.enum([
@@ -74,7 +75,10 @@ export type RuntimeSlashCommandsResponse = z.infer<typeof runtimeSlashCommandsRe
 export const runtimeAgentIdSchema = z.enum(["claude", "codex", "gemini", "opencode", "droid", "kiro", "cline"]);
 export type RuntimeAgentId = z.infer<typeof runtimeAgentIdSchema>;
 
-export const runtimeBoardColumnIdSchema = z.enum(["backlog", "in_progress", "review", "trash"]);
+export const runtimeBoardColumnIdSchema = z
+	.string()
+	.min(1)
+	.refine((value) => isBoardColumnId(value), "Unknown board column.");
 export type RuntimeBoardColumnId = z.infer<typeof runtimeBoardColumnIdSchema>;
 
 export const runtimeTaskAutoReviewModeSchema = z.enum(["commit", "pr", "move_to_trash"]);
@@ -319,12 +323,7 @@ export const runtimeWorkspaceStateNotifyResponseSchema = z.object({
 });
 export type RuntimeWorkspaceStateNotifyResponse = z.infer<typeof runtimeWorkspaceStateNotifyResponseSchema>;
 
-export const runtimeProjectTaskCountsSchema = z.object({
-	backlog: z.number(),
-	in_progress: z.number(),
-	review: z.number(),
-	trash: z.number(),
-});
+export const runtimeProjectTaskCountsSchema = z.record(runtimeBoardColumnIdSchema, z.number());
 export type RuntimeProjectTaskCounts = z.infer<typeof runtimeProjectTaskCountsSchema>;
 
 export const runtimeProjectSummarySchema = z.object({
@@ -906,6 +905,20 @@ export const runtimeAgentDefinitionSchema = z.object({
 });
 export type RuntimeAgentDefinition = z.infer<typeof runtimeAgentDefinitionSchema>;
 
+export const runtimeStageAutomationPromptConfigSchema = z.object({
+	columnId: runtimeBoardColumnIdSchema,
+	title: z.string(),
+	promptTemplate: z.string(),
+	failurePromptTemplate: z.string(),
+	promptTemplateDefault: z.string(),
+	failurePromptTemplateDefault: z.string(),
+	passSignal: z.string(),
+	failSignal: z.string(),
+	passTargetColumnId: runtimeBoardColumnIdSchema,
+	failTargetColumnId: runtimeBoardColumnIdSchema,
+});
+export type RuntimeStageAutomationPromptConfig = z.infer<typeof runtimeStageAutomationPromptConfigSchema>;
+
 export const runtimeConfigResponseSchema = z.object({
 	selectedAgentId: runtimeAgentIdSchema,
 	selectedShortcutLabel: z.string().nullable(),
@@ -921,6 +934,7 @@ export const runtimeConfigResponseSchema = z.object({
 	clineProviderSettings: runtimeClineProviderSettingsSchema,
 	commitPromptTemplate: z.string(),
 	openPrPromptTemplate: z.string(),
+	stageAutomationPrompts: z.array(runtimeStageAutomationPromptConfigSchema),
 	commitPromptTemplateDefault: z.string(),
 	openPrPromptTemplateDefault: z.string(),
 });
@@ -934,6 +948,8 @@ export const runtimeConfigSaveRequestSchema = z.object({
 	readyForReviewNotificationsEnabled: z.boolean().optional(),
 	commitPromptTemplate: z.string().optional(),
 	openPrPromptTemplate: z.string().optional(),
+	stagePromptTemplates: z.record(runtimeBoardColumnIdSchema, z.string()).optional(),
+	stageFailurePromptTemplates: z.record(runtimeBoardColumnIdSchema, z.string()).optional(),
 });
 export type RuntimeConfigSaveRequest = z.infer<typeof runtimeConfigSaveRequestSchema>;
 

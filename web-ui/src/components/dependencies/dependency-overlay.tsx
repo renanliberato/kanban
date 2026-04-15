@@ -1,3 +1,9 @@
+import {
+	getBoardColumnOrderIndex,
+	isBacklogColumnId,
+	isTaskWorkspaceColumnId,
+	normalizeBoardColumnId,
+} from "@runtime-board-columns";
 import { X } from "lucide-react";
 import type { RefObject } from "react";
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -57,7 +63,6 @@ interface AnchorPoint {
 
 const SOURCE_CONNECTOR_PADDING = 2;
 const TARGET_CONNECTOR_PADDING = 8;
-const COLUMN_ORDER: BoardColumnId[] = ["backlog", "in_progress", "review", "trash"];
 const SIDE_NORMALS: Record<AnchorSide, { x: number; y: number }> = {
 	left: { x: -1, y: 0 },
 	right: { x: 1, y: 0 },
@@ -66,11 +71,7 @@ const SIDE_NORMALS: Record<AnchorSide, { x: number; y: number }> = {
 };
 
 function getColumnOrder(columnId: BoardColumnId | null): number | null {
-	if (!columnId) {
-		return null;
-	}
-	const index = COLUMN_ORDER.indexOf(columnId);
-	return index === -1 ? null : index;
+	return getBoardColumnOrderIndex(columnId);
 }
 
 function cubicPoint(
@@ -145,10 +146,7 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 function normalizeColumnId(value: string | undefined): BoardColumnId | null {
-	if (value === "backlog" || value === "in_progress" || value === "review" || value === "trash") {
-		return value;
-	}
-	return null;
+	return normalizeBoardColumnId(value);
 }
 
 function dot(a: { x: number; y: number }, b: { x: number; y: number }): number {
@@ -205,12 +203,7 @@ function chooseConnection(
 	const secondColumnOrder = getColumnOrder(secondColumnId);
 
 	if (secondColumnId === null) {
-		const sourceSide: AnchorSide =
-			firstColumnId === "backlog"
-				? "right"
-				: firstColumnId === "in_progress" || firstColumnId === "review"
-					? "left"
-					: "left";
+		const sourceSide: AnchorSide = isBacklogColumnId(firstColumnId) ? "right" : "left";
 		const targetSide: AnchorSide = sourceSide === "right" ? "left" : "right";
 		return {
 			start: getAnchorPoint(firstAnchor, sourceSide, firstLaneOffset, firstPadding),
@@ -220,9 +213,7 @@ function chooseConnection(
 
 	if (firstColumnId === null) {
 		const targetSide: AnchorSide =
-			secondColumnId === "backlog" || secondColumnId === "in_progress" || secondColumnId === "review"
-				? "right"
-				: "left";
+			isBacklogColumnId(secondColumnId) || isTaskWorkspaceColumnId(secondColumnId) ? "right" : "left";
 		const sourceSide: AnchorSide = targetSide === "right" ? "left" : "right";
 		return {
 			start: getAnchorPoint(firstAnchor, sourceSide, firstLaneOffset, firstPadding),
@@ -234,7 +225,7 @@ function chooseConnection(
 		firstColumnId &&
 		secondColumnId &&
 		firstColumnId === secondColumnId &&
-		(firstColumnId === "backlog" || firstColumnId === "in_progress" || firstColumnId === "review")
+		(isBacklogColumnId(firstColumnId) || isTaskWorkspaceColumnId(firstColumnId))
 	) {
 		return {
 			start: getAnchorPoint(firstAnchor, "right", firstLaneOffset, firstPadding),

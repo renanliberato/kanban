@@ -112,6 +112,7 @@ function createRuntimeConfig(overrides: Partial<RuntimeConfigResponse> = {}): Ru
 		},
 		commitPromptTemplate: "commit",
 		openPrPromptTemplate: "pr",
+		stageAutomationPrompts: [],
 		commitPromptTemplateDefault: "commit",
 		openPrPromptTemplateDefault: "pr",
 		...overrides,

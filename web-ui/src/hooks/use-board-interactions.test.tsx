@@ -4,7 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useBoardInteractions } from "@/hooks/use-board-interactions";
 import type { UseTaskSessionsResult } from "@/hooks/use-task-sessions";
-import type { RuntimeTaskSessionSummary } from "@/runtime/types";
+import type { RuntimeStageAutomationPromptConfig, RuntimeTaskSessionSummary } from "@/runtime/types";
+import type { SendTerminalInputOptions } from "@/terminal/terminal-input";
 import type { BoardCard, BoardData } from "@/types";
 
 const notifyErrorMock = vi.hoisted(() => vi.fn());
@@ -66,6 +67,8 @@ const NOOP_SEND_TASK_INPUT = async (): Promise<{ ok: boolean }> => ({ ok: true }
 const NOOP_RUN_AUTO_REVIEW = async (): Promise<boolean> => false;
 
 interface HookSnapshot {
+	board?: BoardData;
+	setSessions?: Dispatch<SetStateAction<Record<string, RuntimeTaskSessionSummary>>>;
 	handleRestoreTaskFromTrash: (taskId: string) => void;
 	handleStartTask: (taskId: string) => void;
 	handleCardSelect: (taskId: string) => void;
@@ -138,6 +141,159 @@ function HookHarness({
 	}, [actions.handleCardSelect, actions.handleRestoreTaskFromTrash, actions.handleStartTask, onSnapshot]);
 
 	return null;
+}
+
+function createAwaitingReviewSession(
+	taskId: string,
+	updatedAt: number,
+	finalMessage: string,
+): RuntimeTaskSessionSummary {
+	return {
+		taskId,
+		state: "awaiting_review",
+		agentId: "codex",
+		workspacePath: `/tmp/${taskId}`,
+		pid: 123,
+		startedAt: 1,
+		updatedAt,
+		lastOutputAt: updatedAt,
+		reviewReason: "hook",
+		exitCode: null,
+		lastHookAt: updatedAt,
+		latestHookActivity: {
+			activityText: null,
+			toolName: null,
+			toolInputSummary: null,
+			finalMessage,
+			hookEventName: null,
+			notificationType: null,
+			source: null,
+		},
+		warningMessage: null,
+	};
+}
+
+const QA_STAGE_PROMPT: RuntimeStageAutomationPromptConfig = {
+	columnId: "qa",
+	title: "QA",
+	promptTemplate: "run qa",
+	failurePromptTemplate: "fix qa",
+	promptTemplateDefault: "run qa",
+	failurePromptTemplateDefault: "fix qa",
+	passSignal: "QA PASSED",
+	failSignal: "QA FAILED",
+	passTargetColumnId: "security_review",
+	failTargetColumnId: "in_progress",
+};
+
+const SECURITY_REVIEW_STAGE_PROMPT: RuntimeStageAutomationPromptConfig = {
+	columnId: "security_review",
+	title: "Security Review",
+	promptTemplate: "run security review",
+	failurePromptTemplate: "fix security review",
+	promptTemplateDefault: "run security review",
+	failurePromptTemplateDefault: "fix security review",
+	passSignal: "SECURITY REVIEW PASSED",
+	failSignal: "SECURITY REVIEW FAILED",
+	passTargetColumnId: "review",
+	failTargetColumnId: "in_progress",
+};
+
+function createStageBoard(columnId: string, task: BoardCard): BoardData {
+	return {
+		columns: [
+			{ id: "backlog", title: "Backlog", cards: [] },
+			{ id: "in_progress", title: "In Progress", cards: columnId === "in_progress" ? [task] : [] },
+			{ id: "qa", title: "QA", cards: columnId === "qa" ? [task] : [] },
+			{
+				id: "security_review",
+				title: "Security Review",
+				cards: columnId === "security_review" ? [task] : [],
+			},
+			{ id: "review", title: "Review", cards: columnId === "review" ? [task] : [] },
+			{ id: "trash", title: "Trash", cards: columnId === "trash" ? [task] : [] },
+		],
+		dependencies: [],
+	};
+}
+
+function SessionTransitionHarness({
+	initialBoard,
+	initialSessions,
+	sendTaskSessionInput,
+	stageAutomationPrompts,
+	onSnapshot,
+}: {
+	initialBoard: BoardData;
+	initialSessions: Record<string, RuntimeTaskSessionSummary>;
+	sendTaskSessionInput: (
+		taskId: string,
+		input: string,
+		options?: SendTerminalInputOptions,
+	) => Promise<{ ok: boolean; message?: string }>;
+	stageAutomationPrompts: readonly RuntimeStageAutomationPromptConfig[];
+	onSnapshot: (snapshot: HookSnapshot) => void;
+}): null {
+	const [board, setBoard] = useState<BoardData>(initialBoard);
+	const [sessions, setSessions] = useState<Record<string, RuntimeTaskSessionSummary>>(initialSessions);
+	const [, setSelectedTaskId] = useState<string | null>(null);
+	const [, setIsClearTrashDialogOpen] = useState(false);
+	const [, setIsGitHistoryOpen] = useState(false);
+
+	useBoardInteractions({
+		board,
+		setBoard,
+		sessions,
+		setSessions,
+		selectedCard: null,
+		selectedTaskId: null,
+		currentProjectId: "project-1",
+		setSelectedTaskId,
+		setIsClearTrashDialogOpen,
+		setIsGitHistoryOpen,
+		stopTaskSession: NOOP_STOP_SESSION,
+		cleanupTaskWorkspace: NOOP_CLEANUP_WORKSPACE,
+		ensureTaskWorkspace: async () => ({ ok: true }),
+		startTaskSession: async () => ({ ok: true }),
+		fetchTaskWorkspaceInfo: NOOP_FETCH_WORKSPACE_INFO,
+		sendTaskSessionInput,
+		readyForReviewNotificationsEnabled: false,
+		stageAutomationPrompts,
+		taskGitActionLoadingByTaskId: {},
+		runAutoReviewGitAction: NOOP_RUN_AUTO_REVIEW,
+	});
+
+	useEffect(() => {
+		onSnapshot({
+			board,
+			setSessions,
+			handleRestoreTaskFromTrash: () => {},
+			handleStartTask: () => {},
+			handleCardSelect: () => {},
+		});
+	}, [board, onSnapshot, setSessions]);
+
+	return null;
+}
+
+function mockBoardSessionDependencies(): void {
+	useProgrammaticCardMovesMock.mockReturnValue({
+		handleProgrammaticCardMoveReady: () => {},
+		setRequestMoveTaskToTrashHandler: () => {},
+		tryProgrammaticCardMove: () => "unavailable" as const,
+		consumeProgrammaticCardMove: () => ({}),
+		resolvePendingProgrammaticTrashMove: () => {},
+		waitForProgrammaticCardMoveAvailability: async () => {},
+		resetProgrammaticCardMoves: () => {},
+		requestMoveTaskToTrashWithAnimation: async () => {},
+		programmaticCardMoveCycle: 0,
+	});
+	useLinkedBacklogTaskActionsMock.mockReturnValue({
+		handleCreateDependency: () => {},
+		handleDeleteDependency: () => {},
+		confirmMoveTaskToTrash: async () => {},
+		requestMoveTaskToTrash: async () => {},
+	});
 }
 
 describe("useBoardInteractions", () => {
@@ -253,6 +409,242 @@ describe("useBoardInteractions", () => {
 		expect(started).toBe(true);
 		expect(ensureTaskWorkspace).toHaveBeenCalledWith(backlogTask);
 		expect(startTaskSession).toHaveBeenCalledWith(backlogTask);
+	});
+
+	it("keeps the original in-progress to review transition when no stage automation is configured", async () => {
+		let latestSnapshot: HookSnapshot | null = null;
+		const sendTaskSessionInput = vi.fn(async () => ({ ok: true as const }));
+		mockBoardSessionDependencies();
+
+		const task = createTask("task-1", "Task", 1);
+		const board: BoardData = {
+			columns: [
+				{ id: "backlog", title: "Backlog", cards: [] },
+				{ id: "in_progress", title: "In Progress", cards: [task] },
+				{ id: "review", title: "Review", cards: [] },
+				{ id: "trash", title: "Trash", cards: [] },
+			],
+			dependencies: [],
+		};
+
+		await act(async () => {
+			root.render(
+				<SessionTransitionHarness
+					initialBoard={board}
+					initialSessions={{ "task-1": createAwaitingReviewSession("task-1", 10, "Done") }}
+					sendTaskSessionInput={sendTaskSessionInput}
+					stageAutomationPrompts={[]}
+					onSnapshot={(snapshot) => {
+						latestSnapshot = snapshot;
+					}}
+				/>,
+			);
+		});
+
+		const latestBoard: BoardData | null = (latestSnapshot as HookSnapshot | null)?.board ?? null;
+		expect(latestBoard?.columns.find((column) => column.id === "review")?.cards[0]?.id).toBe("task-1");
+		expect(sendTaskSessionInput).not.toHaveBeenCalled();
+	});
+
+	it("moves awaiting-review in-progress tasks to the first configured stage and sends its prompt", async () => {
+		let latestSnapshot: HookSnapshot | null = null;
+		const sendTaskSessionInput = vi.fn(async () => ({ ok: true as const }));
+		mockBoardSessionDependencies();
+
+		const task = createTask("task-1", "Task", 1);
+		await act(async () => {
+			root.render(
+				<SessionTransitionHarness
+					initialBoard={createStageBoard("in_progress", task)}
+					initialSessions={{ "task-1": createAwaitingReviewSession("task-1", 10, "Done") }}
+					sendTaskSessionInput={sendTaskSessionInput}
+					stageAutomationPrompts={[QA_STAGE_PROMPT, SECURITY_REVIEW_STAGE_PROMPT]}
+					onSnapshot={(snapshot) => {
+						latestSnapshot = snapshot;
+					}}
+				/>,
+			);
+		});
+
+		const latestBoard: BoardData | null = (latestSnapshot as HookSnapshot | null)?.board ?? null;
+		expect(latestBoard?.columns.find((column) => column.id === "qa")?.cards[0]?.id).toBe("task-1");
+		await act(async () => {
+			vi.advanceTimersByTime(200);
+			await Promise.resolve();
+		});
+		expect(sendTaskSessionInput).toHaveBeenCalledWith("task-1", "run qa", {
+			appendNewline: false,
+			mode: "paste",
+		});
+		expect(sendTaskSessionInput).toHaveBeenCalledWith("task-1", "\r", { appendNewline: false });
+	});
+
+	it("does not auto-progress a stage on the same completion that entered it", async () => {
+		let latestSnapshot: HookSnapshot | null = null;
+		const sendTaskSessionInput = vi.fn(async () => ({ ok: true as const }));
+		mockBoardSessionDependencies();
+
+		const task = createTask("task-1", "Task", 1);
+		await act(async () => {
+			root.render(
+				<SessionTransitionHarness
+					initialBoard={createStageBoard("qa", task)}
+					initialSessions={{ "task-1": createAwaitingReviewSession("task-1", 10, "QA FAILED") }}
+					sendTaskSessionInput={sendTaskSessionInput}
+					stageAutomationPrompts={[QA_STAGE_PROMPT, SECURITY_REVIEW_STAGE_PROMPT]}
+					onSnapshot={(snapshot) => {
+						latestSnapshot = snapshot;
+					}}
+				/>,
+			);
+		});
+
+		const latestBoard: BoardData | null = (latestSnapshot as HookSnapshot | null)?.board ?? null;
+		expect(latestBoard?.columns.find((column) => column.id === "qa")?.cards[0]?.id).toBe("task-1");
+		expect(latestBoard?.columns.find((column) => column.id === "in_progress")?.cards[0]?.id).toBeUndefined();
+	});
+
+	it("keeps staged tasks in place until the final line has an explicit pass or fail signal", async () => {
+		let latestBoard: BoardData | null = null;
+		let latestSetSessions: Dispatch<SetStateAction<Record<string, RuntimeTaskSessionSummary>>> | null = null;
+		const sendTaskSessionInput = vi.fn(async () => ({ ok: true as const }));
+		mockBoardSessionDependencies();
+
+		const task = createTask("task-1", "Task", 1);
+		const initialSession = createAwaitingReviewSession("task-1", 10, "Done");
+		await act(async () => {
+			root.render(
+				<SessionTransitionHarness
+					initialBoard={createStageBoard("qa", task)}
+					initialSessions={{ "task-1": initialSession }}
+					sendTaskSessionInput={sendTaskSessionInput}
+					stageAutomationPrompts={[QA_STAGE_PROMPT, SECURITY_REVIEW_STAGE_PROMPT]}
+					onSnapshot={(snapshot) => {
+						latestBoard = snapshot.board ?? null;
+						latestSetSessions = snapshot.setSessions ?? null;
+					}}
+				/>,
+			);
+		});
+
+		const setSessions = latestSetSessions as Dispatch<
+			SetStateAction<Record<string, RuntimeTaskSessionSummary>>
+		> | null;
+		if (!setSessions) {
+			throw new Error("Expected session setter.");
+		}
+		await act(async () => {
+			setSessions({
+				"task-1": createAwaitingReviewSession("task-1", 11, "QA PASSED\nbut not on final line"),
+			});
+		});
+
+		const boardAfterUnsignaledUpdate = latestBoard as BoardData | null;
+		expect(boardAfterUnsignaledUpdate?.columns.find((column) => column.id === "qa")?.cards[0]?.id).toBe("task-1");
+		expect(
+			boardAfterUnsignaledUpdate?.columns.find((column) => column.id === "security_review")?.cards[0]?.id,
+		).toBeUndefined();
+	});
+
+	it("routes failed stages back to in progress and sends the failure prompt", async () => {
+		let latestBoard: BoardData | null = null;
+		let latestSetSessions: Dispatch<SetStateAction<Record<string, RuntimeTaskSessionSummary>>> | null = null;
+		const sendTaskSessionInput = vi.fn(async () => ({ ok: true as const }));
+		mockBoardSessionDependencies();
+
+		const task = createTask("task-1", "Task", 1);
+		await act(async () => {
+			root.render(
+				<SessionTransitionHarness
+					initialBoard={createStageBoard("qa", task)}
+					initialSessions={{ "task-1": createAwaitingReviewSession("task-1", 10, "Done") }}
+					sendTaskSessionInput={sendTaskSessionInput}
+					stageAutomationPrompts={[QA_STAGE_PROMPT, SECURITY_REVIEW_STAGE_PROMPT]}
+					onSnapshot={(snapshot) => {
+						latestBoard = snapshot.board ?? null;
+						latestSetSessions = snapshot.setSessions ?? null;
+					}}
+				/>,
+			);
+		});
+
+		const setSessions = latestSetSessions as Dispatch<
+			SetStateAction<Record<string, RuntimeTaskSessionSummary>>
+		> | null;
+		if (!setSessions) {
+			throw new Error("Expected session setter.");
+		}
+		await act(async () => {
+			setSessions({
+				"task-1": createAwaitingReviewSession("task-1", 11, "Needs work.\nQA FAILED"),
+			});
+		});
+
+		const boardAfterFailure = latestBoard as BoardData | null;
+		expect(boardAfterFailure?.columns.find((column) => column.id === "in_progress")?.cards[0]?.id).toBe("task-1");
+		expect(boardAfterFailure?.columns.find((column) => column.id === "qa")?.cards[0]?.id).toBeUndefined();
+		await act(async () => {
+			vi.advanceTimersByTime(200);
+			await Promise.resolve();
+		});
+		expect(sendTaskSessionInput).toHaveBeenCalledWith("task-1", "fix qa", {
+			appendNewline: false,
+			mode: "paste",
+		});
+	});
+
+	it("advances through configured stages on pass signals", async () => {
+		let latestBoard: BoardData | null = null;
+		let latestSetSessions: Dispatch<SetStateAction<Record<string, RuntimeTaskSessionSummary>>> | null = null;
+		const sendTaskSessionInput = vi.fn(async () => ({ ok: true as const }));
+		mockBoardSessionDependencies();
+
+		const task = createTask("task-1", "Task", 1);
+		await act(async () => {
+			root.render(
+				<SessionTransitionHarness
+					initialBoard={createStageBoard("qa", task)}
+					initialSessions={{ "task-1": createAwaitingReviewSession("task-1", 10, "Done") }}
+					sendTaskSessionInput={sendTaskSessionInput}
+					stageAutomationPrompts={[QA_STAGE_PROMPT, SECURITY_REVIEW_STAGE_PROMPT]}
+					onSnapshot={(snapshot) => {
+						latestBoard = snapshot.board ?? null;
+						latestSetSessions = snapshot.setSessions ?? null;
+					}}
+				/>,
+			);
+		});
+
+		const setSessions = latestSetSessions as Dispatch<
+			SetStateAction<Record<string, RuntimeTaskSessionSummary>>
+		> | null;
+		if (!setSessions) {
+			throw new Error("Expected session setter.");
+		}
+		await act(async () => {
+			setSessions({
+				"task-1": createAwaitingReviewSession("task-1", 11, "All good.\nQA PASSED"),
+			});
+		});
+
+		const boardAfterQaPass = latestBoard as BoardData | null;
+		expect(boardAfterQaPass?.columns.find((column) => column.id === "security_review")?.cards[0]?.id).toBe("task-1");
+		await act(async () => {
+			vi.advanceTimersByTime(200);
+			await Promise.resolve();
+		});
+		expect(sendTaskSessionInput).toHaveBeenCalledWith("task-1", "run security review", {
+			appendNewline: false,
+			mode: "paste",
+		});
+
+		await act(async () => {
+			setSessions({
+				"task-1": createAwaitingReviewSession("task-1", 12, "Clean.\nSECURITY REVIEW PASSED"),
+			});
+		});
+		const boardAfterSecurityPass = latestBoard as BoardData | null;
+		expect(boardAfterSecurityPass?.columns.find((column) => column.id === "review")?.cards[0]?.id).toBe("task-1");
 	});
 
 	it("waits for a new backlog card height to settle before starting animation", async () => {

@@ -57,6 +57,7 @@ function createRuntimeConfigResponse(
 		},
 		commitPromptTemplate: "",
 		openPrPromptTemplate: "",
+		stageAutomationPrompts: [],
 		commitPromptTemplateDefault: "",
 		openPrPromptTemplateDefault: "",
 	};

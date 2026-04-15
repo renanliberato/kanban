@@ -122,6 +122,7 @@ export function buildRuntimeConfigResponse(
 		clineProviderSettings,
 		commitPromptTemplate: runtimeConfig.commitPromptTemplate,
 		openPrPromptTemplate: runtimeConfig.openPrPromptTemplate,
+		stageAutomationPrompts: runtimeConfig.stageAutomationPrompts,
 		commitPromptTemplateDefault: runtimeConfig.commitPromptTemplateDefault,
 		openPrPromptTemplateDefault: runtimeConfig.openPrPromptTemplateDefault,
 	};

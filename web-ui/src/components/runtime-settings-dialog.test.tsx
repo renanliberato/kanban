@@ -176,6 +176,7 @@ const savedClineOauthConfig = {
 	shortcuts: [],
 	commitPromptTemplate: "",
 	openPrPromptTemplate: "",
+	stageAutomationPrompts: [],
 	commitPromptTemplateDefault: "",
 	openPrPromptTemplateDefault: "",
 	globalConfigPath: null,

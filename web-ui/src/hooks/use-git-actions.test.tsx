@@ -111,6 +111,7 @@ function createRuntimeConfig(selectedAgentId: RuntimeConfigResponse["selectedAge
 		},
 		commitPromptTemplate: "commit",
 		openPrPromptTemplate: "pr",
+		stageAutomationPrompts: [],
 		commitPromptTemplateDefault: "commit",
 		openPrPromptTemplateDefault: "pr",
 	};

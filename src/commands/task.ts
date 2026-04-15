@@ -11,6 +11,7 @@ import type {
 	RuntimeWorkspaceStateResponse,
 } from "../core/api-contract";
 import { runtimeAgentIdSchema, runtimeClineReasoningEffortSchema } from "../core/api-contract";
+import { getBoardColumnDefinitions, isTaskWorkspaceColumnId, normalizeBoardColumnId } from "../core/board-columns";
 import { buildKanbanRuntimeUrl, getKanbanRuntimeOrigin, getRuntimeFetch } from "../core/runtime-endpoint";
 import {
 	addTaskDependency,
@@ -27,8 +28,8 @@ import { resolveProjectInputPath } from "../projects/project-path";
 import { loadWorkspaceContext, mutateWorkspaceState } from "../state/workspace-state";
 import type { RuntimeAppRouter } from "../trpc/app-router";
 
-const LIST_TASK_COLUMNS = ["backlog", "in_progress", "review", "trash"] as const;
-type ListTaskColumn = (typeof LIST_TASK_COLUMNS)[number];
+const LIST_TASK_COLUMNS = getBoardColumnDefinitions().map((column) => column.id);
+type ListTaskColumn = RuntimeBoardColumnId;
 type TaskCommandTarget = { taskId?: string; column?: ListTaskColumn };
 
 type ResolvedTaskCommandTarget =
@@ -63,8 +64,9 @@ function parseListColumn(value: string | undefined): ListTaskColumn | undefined 
 	if (value === undefined) {
 		return undefined;
 	}
-	if (value === "backlog" || value === "in_progress" || value === "review" || value === "trash") {
-		return value;
+	const columnId = normalizeBoardColumnId(value);
+	if (columnId) {
+		return columnId;
 	}
 	throw new Error(`Invalid column "${value}". Expected one of: ${LIST_TASK_COLUMNS.join(", ")}.`);
 }
@@ -775,7 +777,7 @@ interface TrashTaskMutationValue {
 }
 
 function columnCanHaveLiveTaskSession(columnId: ListTaskColumn): boolean {
-	return columnId === "in_progress" || columnId === "review";
+	return isTaskWorkspaceColumnId(columnId);
 }
 
 async function trashTaskById(input: {

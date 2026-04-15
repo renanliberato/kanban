@@ -8,6 +8,7 @@ import {
 	type SensorAPI,
 	type SnapDragActions,
 } from "@hello-pangea/dnd";
+import { getBoardColumnOrderIndex } from "@runtime-board-columns";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -18,8 +19,6 @@ import type { RuntimeTaskSessionSummary } from "@/runtime/types";
 import { canCreateTaskDependency } from "@/state/board-state";
 import { findCardColumnId, type ProgrammaticCardMoveInFlight } from "@/state/drag-rules";
 import type { BoardCard, BoardColumnId, BoardData, BoardDependency } from "@/types";
-
-const BOARD_COLUMN_ORDER: BoardColumnId[] = ["backlog", "in_progress", "review", "trash"];
 
 export type RequestProgrammaticCardMove = (move: ProgrammaticCardMoveInFlight) => boolean;
 
@@ -207,9 +206,9 @@ export function KanbanBoard({
 				return false;
 			}
 
-			const sourceOrderIndex = BOARD_COLUMN_ORDER.indexOf(sourceColumnId);
-			const targetOrderIndex = BOARD_COLUMN_ORDER.indexOf(targetColumnId);
-			if (sourceOrderIndex < 0 || targetOrderIndex < 0) {
+			const sourceOrderIndex = getBoardColumnOrderIndex(sourceColumnId);
+			const targetOrderIndex = getBoardColumnOrderIndex(targetColumnId);
+			if (sourceOrderIndex === null || targetOrderIndex === null) {
 				return false;
 			}
 			if (move.insertAtTop && !canAnimateProgrammaticTopInsertion(taskId, targetColumnId)) {

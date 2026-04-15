@@ -7,6 +7,12 @@ import type {
 	RuntimeWorkspaceStateResponse,
 } from "../core/api-contract";
 import {
+	createEmptyProjectTaskCounts as createConfiguredEmptyProjectTaskCounts,
+	getFirstPostInProgressColumnId,
+	normalizeBoardColumnId,
+	TRASH_COLUMN_ID,
+} from "../core/board-columns";
+import {
 	listWorkspaceIndexEntries,
 	loadWorkspaceBoardById,
 	loadWorkspaceContext,
@@ -92,31 +98,16 @@ export interface WorkspaceRegistry {
 }
 
 function createEmptyProjectTaskCounts(): RuntimeProjectTaskCounts {
-	return {
-		backlog: 0,
-		in_progress: 0,
-		review: 0,
-		trash: 0,
-	};
+	return createConfiguredEmptyProjectTaskCounts();
 }
 
 function countTasksByColumn(board: RuntimeBoardData): RuntimeProjectTaskCounts {
 	const counts = createEmptyProjectTaskCounts();
 	for (const column of board.columns) {
 		const count = column.cards.length;
-		switch (column.id) {
-			case "backlog":
-				counts.backlog += count;
-				break;
-			case "in_progress":
-				counts.in_progress += count;
-				break;
-			case "review":
-				counts.review += count;
-				break;
-			case "trash":
-				counts.trash += count;
-				break;
+		const columnId = normalizeBoardColumnId(column.id);
+		if (columnId) {
+			counts[columnId] = (counts[columnId] ?? 0) + count;
 		}
 	}
 	return counts;
@@ -125,7 +116,7 @@ function countTasksByColumn(board: RuntimeBoardData): RuntimeProjectTaskCounts {
 export function collectProjectWorktreeTaskIdsForRemoval(board: RuntimeBoardData): Set<string> {
 	const taskIds = new Set<string>();
 	for (const column of board.columns) {
-		if (column.id === "backlog" || column.id === "trash") {
+		if (column.id === "backlog" || column.id === TRASH_COLUMN_ID) {
 			continue;
 		}
 		for (const card of column.cards) {
@@ -155,13 +146,14 @@ function applyLiveSessionStateToProjectTaskCounts(
 			continue;
 		}
 		if (summary.state === "awaiting_review" && columnId === "in_progress") {
-			next.in_progress = Math.max(0, next.in_progress - 1);
-			next.review += 1;
+			next.in_progress = Math.max(0, (next.in_progress ?? 0) - 1);
+			const targetColumnId = getFirstPostInProgressColumnId();
+			next[targetColumnId] = (next[targetColumnId] ?? 0) + 1;
 			continue;
 		}
-		if (summary.state === "interrupted" && columnId !== "trash") {
-			next[columnId] = Math.max(0, next[columnId] - 1);
-			next.trash += 1;
+		if (summary.state === "interrupted" && columnId !== TRASH_COLUMN_ID) {
+			next[columnId] = Math.max(0, (next[columnId] ?? 0) - 1);
+			next[TRASH_COLUMN_ID] = (next[TRASH_COLUMN_ID] ?? 0) + 1;
 		}
 	}
 	return next;

@@ -1,5 +1,6 @@
 import * as Collapsible from "@radix-ui/react-collapsible";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import { type BoardColumnTone, getBoardColumnDefinitions } from "@runtime-board-columns";
 import { ChevronDown, ChevronUp, Ellipsis, ExternalLink, Info, Lightbulb, Plus, X } from "lucide-react";
 import { type MouseEvent as ReactMouseEvent, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { canShowFeaturebaseFeedbackButton } from "@/components/featurebase-feedback-button";
@@ -36,6 +37,16 @@ const SIDEBAR_COLLAPSE_THRESHOLD = 120;
 const SIDEBAR_MIN_EXPANDED_WIDTH = 200;
 const SIDEBAR_MAX_EXPANDED_WIDTH = 600;
 const GITHUB_ISSUES_URL = "https://github.com/cline/kanban/issues";
+const TASK_COUNT_TONE_CLASS_NAMES: Record<BoardColumnTone, string> = {
+	default: "bg-text-primary/15 text-text-primary",
+	accent: "bg-accent/20 text-accent",
+	blue: "bg-status-blue/20 text-status-blue",
+	green: "bg-status-green/20 text-status-green",
+	orange: "bg-status-orange/20 text-status-orange",
+	purple: "bg-status-purple/20 text-status-purple",
+	red: "bg-status-red/20 text-status-red",
+	gold: "bg-status-gold/20 text-status-gold",
+};
 
 interface TaskCountBadge {
 	id: string;
@@ -94,10 +105,7 @@ export function ProjectNavigationPanel({
 	const [pendingProjectRemoval, setPendingProjectRemoval] = useState<RuntimeProjectSummary | null>(null);
 	const isProjectRemovalPending = pendingProjectRemoval !== null && removingProjectId === pendingProjectRemoval.id;
 	const pendingProjectTaskCount = pendingProjectRemoval
-		? pendingProjectRemoval.taskCounts.backlog +
-			pendingProjectRemoval.taskCounts.in_progress +
-			pendingProjectRemoval.taskCounts.review +
-			pendingProjectRemoval.taskCounts.trash
+		? Object.values(pendingProjectRemoval.taskCounts).reduce((sum, count) => sum + count, 0)
 		: 0;
 
 	const isMobile = useIsMobile();
@@ -705,36 +713,15 @@ function ProjectRow({
 	const isRemovingProject = removingProjectId === project.id;
 	const hasAnyProjectRemoval = removingProjectId !== null;
 	const [isMenuOpen, setIsMenuOpen] = useState(false);
-	const taskCountBadges: TaskCountBadge[] = [
-		{
-			id: "backlog",
-			title: "Backlog",
-			shortLabel: "B",
-			toneClassName: "bg-text-primary/15 text-text-primary",
-			count: project.taskCounts.backlog,
-		},
-		{
-			id: "in_progress",
-			title: "In Progress",
-			shortLabel: "IP",
-			toneClassName: "bg-accent/20 text-accent",
-			count: project.taskCounts.in_progress,
-		},
-		{
-			id: "review",
-			title: "Review",
-			shortLabel: "R",
-			toneClassName: "bg-accent-2/20 text-accent-2",
-			count: project.taskCounts.review,
-		},
-		{
-			id: "trash",
-			title: "Trash",
-			shortLabel: "T",
-			toneClassName: "bg-status-red/20 text-status-red",
-			count: project.taskCounts.trash,
-		},
-	].filter((item) => item.count > 0);
+	const taskCountBadges: TaskCountBadge[] = getBoardColumnDefinitions()
+		.map((column) => ({
+			id: column.id,
+			title: column.title,
+			shortLabel: column.shortLabel,
+			toneClassName: TASK_COUNT_TONE_CLASS_NAMES[column.tone],
+			count: project.taskCounts[column.id] ?? 0,
+		}))
+		.filter((item) => item.count > 0);
 
 	return (
 		<div

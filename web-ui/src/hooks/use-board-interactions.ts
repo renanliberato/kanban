@@ -1,4 +1,12 @@
 import type { DropResult } from "@hello-pangea/dnd";
+import {
+	getAutomatedBoardStageColumnDefinitions,
+	getFirstPostInProgressColumnId,
+	getNextWorkflowColumnId,
+	IN_PROGRESS_COLUMN_ID,
+	normalizeBoardColumnId,
+	REVIEW_COLUMN_ID,
+} from "@runtime-board-columns";
 import type { Dispatch, SetStateAction } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { notifyError, showAppToast } from "@/components/app-toaster";
@@ -7,7 +15,11 @@ import { useLinkedBacklogTaskActions } from "@/hooks/use-linked-backlog-task-act
 import { useProgrammaticCardMoves } from "@/hooks/use-programmatic-card-moves";
 import { useReviewAutoActions } from "@/hooks/use-review-auto-actions";
 import type { UseTaskSessionsResult } from "@/hooks/use-task-sessions";
-import type { RuntimeTaskSessionSummary, RuntimeTaskWorkspaceInfoResponse } from "@/runtime/types";
+import type {
+	RuntimeStageAutomationPromptConfig,
+	RuntimeTaskSessionSummary,
+	RuntimeTaskWorkspaceInfoResponse,
+} from "@/runtime/types";
 import {
 	applyDragResult,
 	clearColumnTasks,
@@ -45,6 +57,80 @@ interface PendingProgrammaticStartMoveCompletion {
 	timeoutId: number;
 }
 
+type StageAutomationPromptReason = "entry" | "failure";
+
+interface QueuedStageAutomationPrompt {
+	taskId: string;
+	stage: RuntimeStageAutomationPromptConfig;
+	updatedAt: number;
+	reason: StageAutomationPromptReason;
+}
+
+const STAGE_AUTOMATION_LOG_PREFIX = "[kanban][stage-automation]";
+
+function getStageAutomationPromptKey(taskId: string, columnId: string): string {
+	return `${taskId}:${columnId}`;
+}
+
+function getFinalMessageLine(summary: RuntimeTaskSessionSummary): string {
+	const finalMessage = summary.latestHookActivity?.finalMessage ?? "";
+	const lines = finalMessage
+		.split(/\r?\n/g)
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0);
+	return lines[lines.length - 1] ?? "";
+}
+
+function finalLineHasSignal(summary: RuntimeTaskSessionSummary, signal: string): boolean {
+	const normalizedSignal = signal.trim().toUpperCase();
+	if (!normalizedSignal) {
+		return false;
+	}
+	return getFinalMessageLine(summary).toUpperCase().includes(normalizedSignal);
+}
+
+function normalizeStageAutomationColumnId(columnId: string): string | null {
+	return normalizeBoardColumnId(columnId) ?? (columnId.trim().length > 0 ? columnId.trim() : null);
+}
+
+function createDefaultStageAutomationPrompts(): RuntimeStageAutomationPromptConfig[] {
+	return getAutomatedBoardStageColumnDefinitions().flatMap((definition) => {
+		const automation = definition.automation;
+		if (!automation) {
+			return [];
+		}
+		const passTargetColumnId =
+			normalizeBoardColumnId(automation.passTargetColumnId) ??
+			normalizeBoardColumnId(getNextWorkflowColumnId(definition.id)) ??
+			REVIEW_COLUMN_ID;
+		const failTargetColumnId = normalizeBoardColumnId(automation.failTargetColumnId) ?? IN_PROGRESS_COLUMN_ID;
+		return [
+			{
+				columnId: definition.id,
+				title: definition.title,
+				promptTemplate: automation.promptTemplateDefault,
+				failurePromptTemplate: automation.failurePromptTemplateDefault,
+				promptTemplateDefault: automation.promptTemplateDefault,
+				failurePromptTemplateDefault: automation.failurePromptTemplateDefault,
+				passSignal: automation.passSignal,
+				failSignal: automation.failSignal,
+				passTargetColumnId,
+				failTargetColumnId,
+			},
+		];
+	});
+}
+
+const DEFAULT_STAGE_AUTOMATION_PROMPTS = createDefaultStageAutomationPrompts();
+
+function logStageAutomation(taskId: string, message: string, details?: Record<string, unknown>): void {
+	if (details) {
+		console.info(`${STAGE_AUTOMATION_LOG_PREFIX} [${taskId}] ${message}`, details);
+		return;
+	}
+	console.info(`${STAGE_AUTOMATION_LOG_PREFIX} [${taskId}] ${message}`);
+}
+
 interface UseBoardInteractionsInput {
 	board: BoardData;
 	setBoard: Dispatch<SetStateAction<BoardData>>;
@@ -67,6 +153,7 @@ interface UseBoardInteractionsInput {
 		options?: SendTerminalInputOptions,
 	) => Promise<{ ok: boolean; message?: string }>;
 	readyForReviewNotificationsEnabled: boolean;
+	stageAutomationPrompts?: readonly RuntimeStageAutomationPromptConfig[];
 	taskGitActionLoadingByTaskId: Record<string, TaskGitActionLoadingStateLike>;
 	runAutoReviewGitAction: (taskId: string, action: TaskGitAction) => Promise<boolean>;
 }
@@ -111,15 +198,21 @@ export function useBoardInteractions({
 	fetchTaskWorkspaceInfo,
 	sendTaskSessionInput,
 	readyForReviewNotificationsEnabled,
+	stageAutomationPrompts = DEFAULT_STAGE_AUTOMATION_PROMPTS,
 	taskGitActionLoadingByTaskId,
 	runAutoReviewGitAction,
 }: UseBoardInteractionsInput): UseBoardInteractionsResult {
 	const previousSessionsRef = useRef<Record<string, RuntimeTaskSessionSummary>>({});
+	const previousProjectIdRef = useRef<string | null>(currentProjectId);
 	const notificationPermissionPromptInFlightRef = useRef(false);
 	const moveToTrashLoadingByIdRef = useRef<Record<string, true>>({});
 	const pendingProgrammaticStartMoveCompletionByTaskIdRef = useRef<
 		Record<string, PendingProgrammaticStartMoveCompletion>
 	>({});
+	const enteredStageSessionVersionByKeyRef = useRef<Record<string, number>>({});
+	const processedStagePromptSessionVersionByKeyRef = useRef<Record<string, number>>({});
+	const handledStageFailureSessionVersionByKeyRef = useRef<Record<string, number>>({});
+	const processedStageFailurePromptSessionVersionByKeyRef = useRef<Record<string, number>>({});
 	const [moveToTrashLoadingById, setMoveToTrashLoadingById] = useState<Record<string, boolean>>({});
 	const {
 		handleProgrammaticCardMoveReady,
@@ -132,6 +225,33 @@ export function useBoardInteractions({
 		requestMoveTaskToTrashWithAnimation,
 		programmaticCardMoveCycle,
 	} = useProgrammaticCardMoves();
+	const stageAutomationByColumnId = useMemo(() => {
+		const automationByColumnId = new Map<string, RuntimeStageAutomationPromptConfig>();
+		for (const promptConfig of stageAutomationPrompts) {
+			const columnId = normalizeStageAutomationColumnId(promptConfig.columnId);
+			const passTargetColumnId = normalizeStageAutomationColumnId(promptConfig.passTargetColumnId);
+			const failTargetColumnId = normalizeStageAutomationColumnId(promptConfig.failTargetColumnId);
+			if (!columnId || !passTargetColumnId || !failTargetColumnId) {
+				continue;
+			}
+			automationByColumnId.set(columnId, {
+				...promptConfig,
+				columnId,
+				passTargetColumnId,
+				failTargetColumnId,
+			});
+		}
+		return automationByColumnId;
+	}, [stageAutomationPrompts]);
+	const firstStageAutomationColumnId = useMemo(() => {
+		for (const promptConfig of stageAutomationPrompts) {
+			const columnId = normalizeStageAutomationColumnId(promptConfig.columnId);
+			if (columnId) {
+				return columnId;
+			}
+		}
+		return null;
+	}, [stageAutomationPrompts]);
 
 	const resolvePendingProgrammaticStartMove = useCallback((taskId: string, started: boolean) => {
 		const pending = pendingProgrammaticStartMoveCompletionByTaskIdRef.current[taskId];
@@ -429,82 +549,278 @@ export function useBoardInteractions({
 		],
 	);
 
+	const sendAutomatedTaskPrompt = useCallback(
+		async (
+			taskId: string,
+			prompt: string,
+			reason: StageAutomationPromptReason,
+			stageTitle: string,
+		): Promise<boolean> => {
+			logStageAutomation(taskId, `sending ${stageTitle} ${reason} prompt`, {
+				promptPreview: prompt.slice(0, 120),
+			});
+			const pasted = await sendTaskSessionInput(taskId, prompt, {
+				appendNewline: false,
+				mode: "paste",
+			});
+			if (!pasted.ok) {
+				logStageAutomation(taskId, `failed to paste ${stageTitle} ${reason} prompt`, {
+					message: pasted.message ?? null,
+				});
+				return false;
+			}
+			await new Promise<void>((resolve) => {
+				window.setTimeout(resolve, 150);
+			});
+			const submitted = await sendTaskSessionInput(taskId, "\r", { appendNewline: false });
+			if (!submitted.ok) {
+				logStageAutomation(taskId, `failed to submit ${stageTitle} ${reason} prompt`, {
+					message: submitted.message ?? null,
+				});
+				return false;
+			}
+			logStageAutomation(taskId, `${stageTitle} ${reason} prompt submitted`);
+			return true;
+		},
+		[sendTaskSessionInput],
+	);
+
 	useEffect(() => {
-		setBoard((currentBoard) => {
-			let nextBoard = currentBoard;
-			const previousSessions = previousSessionsRef.current;
-			const blockedInterruptedTaskIds = new Set<string>();
-			for (const summary of Object.values(sessions)) {
-				const previous = previousSessions[summary.taskId];
-				if (previous && previous.updatedAt > summary.updatedAt) {
-					continue;
-				}
-				const columnId = getTaskColumnId(nextBoard, summary.taskId);
-				if (summary.state === "awaiting_review" && columnId === "in_progress") {
-					const programmaticMoveAttempt = tryProgrammaticCardMove(summary.taskId, columnId, "review");
-					if (programmaticMoveAttempt === "started" || programmaticMoveAttempt === "blocked") {
-						continue;
-					}
-					const moved = moveTaskToColumn(nextBoard, summary.taskId, "review", { insertAtTop: true });
-					if (moved.moved) {
-						nextBoard = moved.board;
-					}
-					continue;
-				}
-				if (summary.state === "running" && columnId === "review") {
-					const programmaticMoveAttempt = tryProgrammaticCardMove(summary.taskId, columnId, "in_progress", {
-						skipKickoff: true,
-					});
-					if (programmaticMoveAttempt === "started" || programmaticMoveAttempt === "blocked") {
-						continue;
-					}
-					const moved = moveTaskToColumn(nextBoard, summary.taskId, "in_progress", { insertAtTop: true });
-					if (moved.moved) {
-						nextBoard = moved.board;
-					}
-					continue;
-				}
-				if (
-					summary.state === "interrupted" &&
-					previous?.state !== "interrupted" &&
-					columnId &&
-					columnId !== "trash"
-				) {
-					const nextTaskId = getNextDetailTaskIdAfterTrashMove(nextBoard, summary.taskId);
-					const programmaticMoveAttempt = tryProgrammaticCardMove(summary.taskId, columnId, "trash", {
-						skipTrashWorkflow: true,
-					});
-					if (programmaticMoveAttempt === "started" || programmaticMoveAttempt === "blocked") {
-						if (programmaticMoveAttempt === "blocked") {
-							blockedInterruptedTaskIds.add(summary.taskId);
-						}
-						setSelectedTaskId((currentSelectedTaskId) =>
-							currentSelectedTaskId === summary.taskId ? nextTaskId : currentSelectedTaskId,
-						);
-						continue;
-					}
-					const moved = moveTaskToColumn(nextBoard, summary.taskId, "trash", { insertAtTop: true });
-					if (moved.moved) {
-						setSelectedTaskId((currentSelectedTaskId) =>
-							currentSelectedTaskId === summary.taskId ? nextTaskId : currentSelectedTaskId,
-						);
-						nextBoard = moved.board;
-					}
+		const queuedStagePrompts: QueuedStageAutomationPrompt[] = [];
+		let nextBoard = board;
+		let boardChanged = false;
+		const previousSessions = previousSessionsRef.current;
+		const blockedInterruptedTaskIds = new Set<string>();
+
+		const queueStagePrompt = (
+			taskId: string,
+			stage: RuntimeStageAutomationPromptConfig,
+			updatedAt: number,
+			reason: StageAutomationPromptReason,
+		) => {
+			const key = getStageAutomationPromptKey(taskId, stage.columnId);
+			const processedRef =
+				reason === "entry"
+					? processedStagePromptSessionVersionByKeyRef
+					: processedStageFailurePromptSessionVersionByKeyRef;
+			if (processedRef.current[key] === updatedAt) {
+				return;
+			}
+			queuedStagePrompts.push({
+				taskId,
+				stage,
+				updatedAt,
+				reason,
+			});
+		};
+
+		const moveTaskForSession = (
+			summary: RuntimeTaskSessionSummary,
+			fromColumnId: BoardColumnId,
+			toColumnId: BoardColumnId,
+			options?: { skipKickoff?: boolean },
+		): boolean => {
+			const programmaticMoveAttempt = tryProgrammaticCardMove(summary.taskId, fromColumnId, toColumnId, options);
+			if (programmaticMoveAttempt === "started" || programmaticMoveAttempt === "blocked") {
+				logStageAutomation(summary.taskId, "moving task via programmatic card move", {
+					fromColumnId,
+					toColumnId,
+					programmaticMoveAttempt,
+					summaryUpdatedAt: summary.updatedAt,
+				});
+				return true;
+			}
+			const moved = moveTaskToColumn(nextBoard, summary.taskId, toColumnId, { insertAtTop: true });
+			if (moved.moved) {
+				nextBoard = moved.board;
+				boardChanged = true;
+			}
+			return moved.moved;
+		};
+
+		const findHandledFailureStage = (
+			taskId: string,
+			updatedAt: number,
+		): RuntimeStageAutomationPromptConfig | null => {
+			for (const stage of stageAutomationByColumnId.values()) {
+				const key = getStageAutomationPromptKey(taskId, stage.columnId);
+				const handledVersion = handledStageFailureSessionVersionByKeyRef.current[key];
+				if (typeof handledVersion === "number" && updatedAt <= handledVersion) {
+					return stage;
 				}
 			}
-			const nextPreviousSessions = { ...sessions };
-			for (const taskId of blockedInterruptedTaskIds) {
-				const previousSession = previousSessions[taskId];
-				if (previousSession) {
-					nextPreviousSessions[taskId] = previousSession;
+			return null;
+		};
+
+		for (const summary of Object.values(sessions)) {
+			const previous = previousSessions[summary.taskId];
+			if (previous && previous.updatedAt > summary.updatedAt) {
+				continue;
+			}
+			const columnId = getTaskColumnId(nextBoard, summary.taskId);
+			if (summary.state === "awaiting_review" && columnId === IN_PROGRESS_COLUMN_ID) {
+				const handledFailureStage = findHandledFailureStage(summary.taskId, summary.updatedAt);
+				if (handledFailureStage) {
+					queueStagePrompt(summary.taskId, handledFailureStage, summary.updatedAt, "failure");
+					logStageAutomation(summary.taskId, "ignoring stale completion after handled stage failure", {
+						stageColumnId: handledFailureStage.columnId,
+						summaryUpdatedAt: summary.updatedAt,
+					});
 					continue;
 				}
-				delete nextPreviousSessions[taskId];
+
+				const targetColumnId = firstStageAutomationColumnId ?? getFirstPostInProgressColumnId();
+				const targetStage = stageAutomationByColumnId.get(targetColumnId);
+				if (targetStage) {
+					const key = getStageAutomationPromptKey(summary.taskId, targetStage.columnId);
+					enteredStageSessionVersionByKeyRef.current[key] = summary.updatedAt;
+				}
+				moveTaskForSession(summary, columnId, targetColumnId);
+				continue;
 			}
-			previousSessionsRef.current = nextPreviousSessions;
-			return nextBoard;
-		});
-	}, [programmaticCardMoveCycle, sessions, setBoard, setSelectedTaskId, tryProgrammaticCardMove]);
+
+			const stage = columnId ? stageAutomationByColumnId.get(columnId) : undefined;
+			if (summary.state === "awaiting_review" && columnId && stage) {
+				const key = getStageAutomationPromptKey(summary.taskId, stage.columnId);
+				let enteredStageSessionVersion = enteredStageSessionVersionByKeyRef.current[key];
+				if (typeof enteredStageSessionVersion !== "number") {
+					enteredStageSessionVersion = summary.updatedAt;
+					enteredStageSessionVersionByKeyRef.current[key] = enteredStageSessionVersion;
+					logStageAutomation(summary.taskId, "recovered missing stage entry version", {
+						stageColumnId: stage.columnId,
+						summaryUpdatedAt: summary.updatedAt,
+					});
+				}
+				queueStagePrompt(summary.taskId, stage, enteredStageSessionVersion, "entry");
+				if (summary.updatedAt <= enteredStageSessionVersion) {
+					logStageAutomation(summary.taskId, "waiting for post-stage completion event", {
+						stageColumnId: stage.columnId,
+						summaryUpdatedAt: summary.updatedAt,
+						enteredStageSessionVersion,
+						finalLine: getFinalMessageLine(summary),
+					});
+					continue;
+				}
+
+				const hasFailedSignal = finalLineHasSignal(summary, stage.failSignal);
+				const hasPassedSignal = finalLineHasSignal(summary, stage.passSignal);
+				logStageAutomation(summary.taskId, "evaluating stage completion", {
+					stageColumnId: stage.columnId,
+					summaryUpdatedAt: summary.updatedAt,
+					finalLine: getFinalMessageLine(summary),
+					hasPassedSignal,
+					hasFailedSignal,
+				});
+				if (hasFailedSignal) {
+					handledStageFailureSessionVersionByKeyRef.current[key] = summary.updatedAt;
+					moveTaskForSession(summary, columnId, stage.failTargetColumnId, { skipKickoff: true });
+					continue;
+				}
+				if (!hasPassedSignal) {
+					continue;
+				}
+
+				const nextStage = stageAutomationByColumnId.get(stage.passTargetColumnId);
+				if (nextStage) {
+					const nextStageKey = getStageAutomationPromptKey(summary.taskId, nextStage.columnId);
+					enteredStageSessionVersionByKeyRef.current[nextStageKey] = summary.updatedAt;
+				}
+				moveTaskForSession(summary, columnId, stage.passTargetColumnId);
+				continue;
+			}
+
+			if (summary.state === "running" && columnId === REVIEW_COLUMN_ID) {
+				moveTaskForSession(summary, columnId, IN_PROGRESS_COLUMN_ID, { skipKickoff: true });
+				continue;
+			}
+			if (summary.state === "interrupted" && previous?.state !== "interrupted" && columnId && columnId !== "trash") {
+				const nextTaskId = getNextDetailTaskIdAfterTrashMove(nextBoard, summary.taskId);
+				const programmaticMoveAttempt = tryProgrammaticCardMove(summary.taskId, columnId, "trash", {
+					skipTrashWorkflow: true,
+				});
+				if (programmaticMoveAttempt === "started" || programmaticMoveAttempt === "blocked") {
+					if (programmaticMoveAttempt === "blocked") {
+						blockedInterruptedTaskIds.add(summary.taskId);
+					}
+					setSelectedTaskId((currentSelectedTaskId) =>
+						currentSelectedTaskId === summary.taskId ? nextTaskId : currentSelectedTaskId,
+					);
+					continue;
+				}
+				const moved = moveTaskToColumn(nextBoard, summary.taskId, "trash", { insertAtTop: true });
+				if (moved.moved) {
+					setSelectedTaskId((currentSelectedTaskId) =>
+						currentSelectedTaskId === summary.taskId ? nextTaskId : currentSelectedTaskId,
+					);
+					nextBoard = moved.board;
+					boardChanged = true;
+				}
+			}
+		}
+
+		const nextPreviousSessions = { ...sessions };
+		for (const taskId of blockedInterruptedTaskIds) {
+			const previousSession = previousSessions[taskId];
+			if (previousSession) {
+				nextPreviousSessions[taskId] = previousSession;
+				continue;
+			}
+			delete nextPreviousSessions[taskId];
+		}
+		previousSessionsRef.current = nextPreviousSessions;
+		if (boardChanged) {
+			setBoard(nextBoard);
+		}
+
+		for (const queued of queuedStagePrompts) {
+			const key = getStageAutomationPromptKey(queued.taskId, queued.stage.columnId);
+			const processedRef =
+				queued.reason === "entry"
+					? processedStagePromptSessionVersionByKeyRef
+					: processedStageFailurePromptSessionVersionByKeyRef;
+			if (processedRef.current[key] === queued.updatedAt) {
+				continue;
+			}
+			processedRef.current[key] = queued.updatedAt;
+			const prompt = queued.reason === "entry" ? queued.stage.promptTemplate : queued.stage.failurePromptTemplate;
+			void (async () => {
+				let lastMessage: string | undefined;
+				for (let attempt = 0; attempt < 3; attempt += 1) {
+					const result = await sendAutomatedTaskPrompt(queued.taskId, prompt, queued.reason, queued.stage.title);
+					if (result) {
+						return;
+					}
+					lastMessage =
+						queued.reason === "entry"
+							? `Could not run ${queued.stage.title} prompt.`
+							: `Could not send ${queued.stage.title} follow-up prompt.`;
+					if (attempt < 2) {
+						await new Promise<void>((resolve) => {
+							window.setTimeout(resolve, 350);
+						});
+					}
+				}
+				if (processedRef.current[key] === queued.updatedAt) {
+					delete processedRef.current[key];
+				}
+				showAppToast({
+					intent: "danger",
+					icon: "warning-sign",
+					message: lastMessage ?? "Could not send automated stage prompt.",
+					timeout: 7000,
+				});
+			})();
+		}
+	}, [
+		board,
+		programmaticCardMoveCycle,
+		sendAutomatedTaskPrompt,
+		sessions,
+		setBoard,
+		setSelectedTaskId,
+		stageAutomationByColumnId,
+		tryProgrammaticCardMove,
+	]);
 
 	const { confirmMoveTaskToTrash, handleCreateDependency, handleDeleteDependency, requestMoveTaskToTrash } =
 		useLinkedBacklogTaskActions({
@@ -868,6 +1184,10 @@ export function useBoardInteractions({
 
 	const resetBoardInteractionsState = useCallback(() => {
 		previousSessionsRef.current = {};
+		enteredStageSessionVersionByKeyRef.current = {};
+		processedStagePromptSessionVersionByKeyRef.current = {};
+		handledStageFailureSessionVersionByKeyRef.current = {};
+		processedStageFailurePromptSessionVersionByKeyRef.current = {};
 		moveToTrashLoadingByIdRef.current = {};
 		setMoveToTrashLoadingById({});
 		for (const taskId of Object.keys(pendingProgrammaticStartMoveCompletionByTaskIdRef.current)) {
@@ -878,6 +1198,10 @@ export function useBoardInteractions({
 	}, [resetProgrammaticCardMoves, resolvePendingProgrammaticStartMove, setIsClearTrashDialogOpen]);
 
 	useEffect(() => {
+		if (previousProjectIdRef.current === currentProjectId) {
+			return;
+		}
+		previousProjectIdRef.current = currentProjectId;
 		resetBoardInteractionsState();
 	}, [currentProjectId, resetBoardInteractionsState]);
 

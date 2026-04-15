@@ -1,7 +1,8 @@
+import { isDetailViewColumnId as isDetailViewBoardColumnId } from "@runtime-board-columns";
 import type { BoardColumnId, BoardData } from "@/types";
 
 export function isDetailViewColumnId(columnId: BoardColumnId): boolean {
-	return columnId === "in_progress" || columnId === "review";
+	return isDetailViewBoardColumnId(columnId);
 }
 
 export function getNextDetailTaskIdAfterTrashMove(board: BoardData, taskId: string): string | null {

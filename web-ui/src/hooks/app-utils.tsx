@@ -1,3 +1,4 @@
+import { createEmptyProjectTaskCounts, normalizeBoardColumnId } from "@runtime-board-columns";
 import type { RuntimeTaskSessionSummary } from "@/runtime/types";
 import { LocalStorageKey } from "@/storage/local-storage-store";
 import type { BoardData, TaskAutoReviewMode } from "@/types";
@@ -20,33 +21,12 @@ export interface SearchableTask {
 	columnTitle: string;
 }
 
-export function countTasksByColumn(board: BoardData): {
-	backlog: number;
-	in_progress: number;
-	review: number;
-	trash: number;
-} {
-	const counts = {
-		backlog: 0,
-		in_progress: 0,
-		review: 0,
-		trash: 0,
-	};
+export function countTasksByColumn(board: BoardData): Record<string, number> {
+	const counts = createEmptyProjectTaskCounts();
 	for (const column of board.columns) {
-		if (column.id === "backlog") {
-			counts.backlog += column.cards.length;
-			continue;
-		}
-		if (column.id === "in_progress") {
-			counts.in_progress += column.cards.length;
-			continue;
-		}
-		if (column.id === "review") {
-			counts.review += column.cards.length;
-			continue;
-		}
-		if (column.id === "trash") {
-			counts.trash += column.cards.length;
+		const columnId = normalizeBoardColumnId(column.id);
+		if (columnId) {
+			counts[columnId] = (counts[columnId] ?? 0) + column.cards.length;
 		}
 	}
 	return counts;

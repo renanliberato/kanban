@@ -1,4 +1,5 @@
 import type { DropResult } from "@hello-pangea/dnd";
+import { normalizeBoardColumnId } from "@runtime-board-columns";
 import { createShortTaskId } from "@runtime-task-id";
 import * as runtimeTaskState from "@runtime-task-state";
 
@@ -60,10 +61,7 @@ function withUpdatedColumns(board: BoardData, columns: BoardColumn[]): BoardData
 }
 
 function normalizeColumnId(id: string): BoardColumnId | null {
-	if (id === "backlog" || id === "in_progress" || id === "review" || id === "trash") {
-		return id;
-	}
-	return null;
+	return normalizeBoardColumnId(id);
 }
 
 function createBrowserUuid(): string {

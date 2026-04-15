@@ -6,7 +6,6 @@ import { basename, join, resolve } from "node:path";
 import { z } from "zod";
 
 import {
-	type RuntimeBoardColumnId,
 	type RuntimeBoardData,
 	type RuntimeGitRepositoryInfo,
 	type RuntimeTaskSessionSummary,
@@ -16,6 +15,7 @@ import {
 	runtimeTaskSessionSummarySchema,
 	runtimeWorkspaceStateSaveRequestSchema,
 } from "../core/api-contract";
+import { getBoardColumnDefinitions } from "../core/board-columns";
 import { createGitProcessEnv } from "../core/git-process-env";
 import { updateTaskDependencies } from "../core/task-board-mutations";
 import { type LockRequest, lockedFileSystem } from "../fs/locked-file-system";
@@ -30,13 +30,6 @@ const SESSIONS_FILENAME = "sessions.json";
 const META_FILENAME = "meta.json";
 const INDEX_VERSION = 1;
 const WORKSPACE_ID_COLLISION_SUFFIX_LENGTH = 4;
-
-const BOARD_COLUMNS: Array<{ id: RuntimeBoardColumnId; title: string }> = [
-	{ id: "backlog", title: "Backlog" },
-	{ id: "in_progress", title: "In Progress" },
-	{ id: "review", title: "Review" },
-	{ id: "trash", title: "Trash" },
-];
 
 interface WorkspaceIndexEntry {
 	workspaceId: string;
@@ -141,12 +134,44 @@ export interface LoadWorkspaceContextOptions {
 
 function createEmptyBoard(): RuntimeBoardData {
 	return {
-		columns: BOARD_COLUMNS.map((column) => ({
+		columns: getBoardColumnDefinitions().map((column) => ({
 			id: column.id,
 			title: column.title,
 			cards: [],
 		})),
 		dependencies: [],
+	};
+}
+
+function ensureBoardColumns(board: RuntimeBoardData): RuntimeBoardData {
+	const columnDefinitions = getBoardColumnDefinitions();
+	const columnById = new Map(board.columns.map((column) => [column.id, column]));
+	let changed = board.columns.length !== columnDefinitions.length;
+	const columns = columnDefinitions.map((definition) => {
+		const existing = columnById.get(definition.id);
+		if (!existing) {
+			changed = true;
+			return {
+				id: definition.id,
+				title: definition.title,
+				cards: [],
+			};
+		}
+		if (existing.title !== definition.title) {
+			changed = true;
+			return {
+				...existing,
+				title: definition.title,
+			};
+		}
+		return existing;
+	});
+	if (!changed) {
+		return board;
+	}
+	return {
+		...board,
+		columns,
 	};
 }
 
@@ -296,7 +321,9 @@ async function readWorkspaceBoard(workspaceId: string): Promise<RuntimeBoardData
 	const boardPath = getWorkspaceBoardPath(workspaceId);
 	const rawBoard = await readJsonFile(boardPath);
 	return updateTaskDependencies(
-		parsePersistedStateFile(boardPath, BOARD_FILENAME, rawBoard, runtimeBoardDataSchema, createEmptyBoard()),
+		ensureBoardColumns(
+			parsePersistedStateFile(boardPath, BOARD_FILENAME, rawBoard, runtimeBoardDataSchema, createEmptyBoard()),
+		),
 	);
 }
 
