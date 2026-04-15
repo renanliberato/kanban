@@ -6,6 +6,7 @@ import {
 	IN_PROGRESS_COLUMN_ID,
 	normalizeBoardColumnId,
 	REVIEW_COLUMN_ID,
+	TRASH_COLUMN_ID,
 } from "@runtime-board-columns";
 import type { Dispatch, SetStateAction } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -55,6 +56,11 @@ interface SelectedBoardCard {
 interface PendingProgrammaticStartMoveCompletion {
 	resolve: (started: boolean) => void;
 	timeoutId: number;
+}
+
+interface ActiveStageFailure {
+	columnId: BoardColumnId;
+	updatedAt: number;
 }
 
 type StageAutomationPromptReason = "entry" | "failure";
@@ -214,6 +220,9 @@ export function useBoardInteractions({
 	const processedStagePromptSessionVersionByKeyRef = useRef<Record<string, number>>({});
 	const handledStageFailureSessionVersionByKeyRef = useRef<Record<string, number>>({});
 	const processedStageFailurePromptSessionVersionByKeyRef = useRef<Record<string, number>>({});
+	const activeEntryStageColumnByTaskIdRef = useRef<Record<string, BoardColumnId>>({});
+	const activeEntryStageStartedByTaskIdRef = useRef<Record<string, true>>({});
+	const activeStageFailureByTaskIdRef = useRef<Record<string, ActiveStageFailure>>({});
 	const [moveToTrashLoadingById, setMoveToTrashLoadingById] = useState<Record<string, boolean>>({});
 	const {
 		handleProgrammaticCardMoveReady,
@@ -629,6 +638,8 @@ export function useBoardInteractions({
 					toColumnId,
 					programmaticMoveAttempt,
 					summaryUpdatedAt: summary.updatedAt,
+					summaryState: summary.state,
+					skipKickoff: options?.skipKickoff ?? false,
 				});
 				return true;
 			}
@@ -637,6 +648,14 @@ export function useBoardInteractions({
 				nextBoard = moved.board;
 				boardChanged = true;
 			}
+			logStageAutomation(summary.taskId, moved.moved ? "moved task via board state" : "task move was a no-op", {
+				fromColumnId,
+				toColumnId,
+				programmaticMoveAttempt,
+				summaryUpdatedAt: summary.updatedAt,
+				summaryState: summary.state,
+				skipKickoff: options?.skipKickoff ?? false,
+			});
 			return moved.moved;
 		};
 
@@ -660,13 +679,69 @@ export function useBoardInteractions({
 				continue;
 			}
 			const columnId = getTaskColumnId(nextBoard, summary.taskId);
+			const activeEntryStageColumnId = activeEntryStageColumnByTaskIdRef.current[summary.taskId];
+			if (columnId === TRASH_COLUMN_ID) {
+				if (activeEntryStageColumnId || activeStageFailureByTaskIdRef.current[summary.taskId]) {
+					logStageAutomation(summary.taskId, "task is in trash; clearing active stage tracking", {
+						activeEntryStageColumnId: activeEntryStageColumnId ?? null,
+						activeFailureColumnId: activeStageFailureByTaskIdRef.current[summary.taskId]?.columnId ?? null,
+						summaryState: summary.state,
+						summaryUpdatedAt: summary.updatedAt,
+					});
+				}
+				delete activeEntryStageColumnByTaskIdRef.current[summary.taskId];
+				delete activeEntryStageStartedByTaskIdRef.current[summary.taskId];
+				delete activeStageFailureByTaskIdRef.current[summary.taskId];
+			}
+			if (
+				activeEntryStageColumnId &&
+				columnId &&
+				columnId !== activeEntryStageColumnId &&
+				columnId !== TRASH_COLUMN_ID &&
+				summary.state !== "interrupted"
+			) {
+				logStageAutomation(summary.taskId, "restoring task to active entry stage", {
+					fromColumnId: columnId,
+					activeEntryStageColumnId,
+					summaryState: summary.state,
+					summaryUpdatedAt: summary.updatedAt,
+					previousState: previous?.state ?? null,
+					previousUpdatedAt: previous?.updatedAt ?? null,
+				});
+				moveTaskForSession(summary, columnId, activeEntryStageColumnId, { skipKickoff: true });
+				continue;
+			}
 			if (summary.state === "awaiting_review" && columnId === IN_PROGRESS_COLUMN_ID) {
+				const activeFailure = activeStageFailureByTaskIdRef.current[summary.taskId];
+				if (activeFailure !== undefined) {
+					const activeFailureStage = stageAutomationByColumnId.get(activeFailure.columnId);
+					if (activeFailureStage) {
+						queueStagePrompt(summary.taskId, activeFailureStage, activeFailure.updatedAt, "failure");
+						logStageAutomation(summary.taskId, "waiting for stage failure follow-up to start", {
+							stageColumnId: activeFailureStage.columnId,
+							summaryUpdatedAt: summary.updatedAt,
+							failureUpdatedAt: activeFailure.updatedAt,
+							currentColumnId: columnId,
+							previousState: previous?.state ?? null,
+							previousUpdatedAt: previous?.updatedAt ?? null,
+						});
+						continue;
+					}
+					logStageAutomation(summary.taskId, "active failure stage is no longer configured", {
+						activeFailureColumnId: activeFailure.columnId,
+						failureUpdatedAt: activeFailure.updatedAt,
+						summaryUpdatedAt: summary.updatedAt,
+						currentColumnId: columnId,
+					});
+				}
+
 				const handledFailureStage = findHandledFailureStage(summary.taskId, summary.updatedAt);
 				if (handledFailureStage) {
 					queueStagePrompt(summary.taskId, handledFailureStage, summary.updatedAt, "failure");
 					logStageAutomation(summary.taskId, "ignoring stale completion after handled stage failure", {
 						stageColumnId: handledFailureStage.columnId,
 						summaryUpdatedAt: summary.updatedAt,
+						currentColumnId: columnId,
 					});
 					continue;
 				}
@@ -677,6 +752,15 @@ export function useBoardInteractions({
 					const key = getStageAutomationPromptKey(summary.taskId, targetStage.columnId);
 					enteredStageSessionVersionByKeyRef.current[key] = summary.updatedAt;
 				}
+				logStageAutomation(summary.taskId, "routing awaiting-review in-progress task to first stage", {
+					fromColumnId: columnId,
+					targetColumnId,
+					targetStageTitle: targetStage?.title ?? null,
+					summaryUpdatedAt: summary.updatedAt,
+					finalLine: getFinalMessageLine(summary),
+					activeFailureColumnId: activeFailure?.columnId ?? null,
+					activeEntryStageColumnId: activeEntryStageColumnId ?? null,
+				});
 				moveTaskForSession(summary, columnId, targetColumnId);
 				continue;
 			}
@@ -703,6 +787,19 @@ export function useBoardInteractions({
 					});
 					continue;
 				}
+				if (
+					stage.completionMode === "always_pass" &&
+					activeEntryStageColumnByTaskIdRef.current[summary.taskId] === stage.columnId &&
+					activeEntryStageStartedByTaskIdRef.current[summary.taskId] !== true
+				) {
+					logStageAutomation(summary.taskId, "waiting for stage prompt to start before evaluating completion", {
+						stageColumnId: stage.columnId,
+						summaryUpdatedAt: summary.updatedAt,
+						enteredStageSessionVersion,
+						finalLine: getFinalMessageLine(summary),
+					});
+					continue;
+				}
 
 				const hasFailedSignal = finalLineHasSignal(summary, stage.failSignal);
 				const hasPassedSignal = finalLineHasSignal(summary, stage.passSignal);
@@ -715,10 +812,29 @@ export function useBoardInteractions({
 					hasFailedSignal,
 				});
 				if (stage.completionMode === "always_pass") {
+					logStageAutomation(summary.taskId, "always-pass stage completed", {
+						stageColumnId: stage.columnId,
+						passTargetColumnId: stage.passTargetColumnId,
+						summaryUpdatedAt: summary.updatedAt,
+					});
+					delete activeEntryStageColumnByTaskIdRef.current[summary.taskId];
+					delete activeEntryStageStartedByTaskIdRef.current[summary.taskId];
 					moveTaskForSession(summary, columnId, stage.passTargetColumnId);
 					continue;
 				}
 				if (hasFailedSignal) {
+					logStageAutomation(summary.taskId, "stage failed; routing to failure target", {
+						stageColumnId: stage.columnId,
+						failTargetColumnId: stage.failTargetColumnId,
+						failurePromptUpdatedAt: summary.updatedAt,
+						finalLine: getFinalMessageLine(summary),
+					});
+					delete activeEntryStageColumnByTaskIdRef.current[summary.taskId];
+					delete activeEntryStageStartedByTaskIdRef.current[summary.taskId];
+					activeStageFailureByTaskIdRef.current[summary.taskId] = {
+						columnId: stage.columnId,
+						updatedAt: summary.updatedAt,
+					};
 					handledStageFailureSessionVersionByKeyRef.current[key] = summary.updatedAt;
 					moveTaskForSession(summary, columnId, stage.failTargetColumnId, { skipKickoff: true });
 					continue;
@@ -732,11 +848,55 @@ export function useBoardInteractions({
 					const nextStageKey = getStageAutomationPromptKey(summary.taskId, nextStage.columnId);
 					enteredStageSessionVersionByKeyRef.current[nextStageKey] = summary.updatedAt;
 				}
+				logStageAutomation(summary.taskId, "stage passed; routing to pass target", {
+					stageColumnId: stage.columnId,
+					passTargetColumnId: stage.passTargetColumnId,
+					nextStageTitle: nextStage?.title ?? null,
+					summaryUpdatedAt: summary.updatedAt,
+					finalLine: getFinalMessageLine(summary),
+				});
+				delete activeEntryStageColumnByTaskIdRef.current[summary.taskId];
+				delete activeEntryStageStartedByTaskIdRef.current[summary.taskId];
 				moveTaskForSession(summary, columnId, stage.passTargetColumnId);
 				continue;
 			}
 
+			if (summary.state === "running" && activeEntryStageColumnId) {
+				activeEntryStageStartedByTaskIdRef.current[summary.taskId] = true;
+				logStageAutomation(summary.taskId, "keeping running task in active entry stage", {
+					currentColumnId: columnId,
+					activeEntryStageColumnId,
+					summaryUpdatedAt: summary.updatedAt,
+				});
+				continue;
+			}
+
+			if (summary.state === "running" && activeStageFailureByTaskIdRef.current[summary.taskId]) {
+				const activeFailure = activeStageFailureByTaskIdRef.current[summary.taskId];
+				logStageAutomation(summary.taskId, "failure follow-up started; clearing active failure", {
+					currentColumnId: columnId,
+					activeFailureColumnId: activeFailure?.columnId ?? null,
+					failureUpdatedAt: activeFailure?.updatedAt ?? null,
+					summaryUpdatedAt: summary.updatedAt,
+				});
+				delete activeStageFailureByTaskIdRef.current[summary.taskId];
+				continue;
+			}
+
+			if (summary.state === "running" && stage) {
+				logStageAutomation(summary.taskId, "keeping running task in stage column", {
+					currentColumnId: columnId,
+					stageColumnId: stage.columnId,
+					summaryUpdatedAt: summary.updatedAt,
+				});
+				continue;
+			}
+
 			if (summary.state === "running" && columnId === REVIEW_COLUMN_ID) {
+				logStageAutomation(summary.taskId, "running task in review; routing back to in progress", {
+					currentColumnId: columnId,
+					summaryUpdatedAt: summary.updatedAt,
+				});
 				moveTaskForSession(summary, columnId, IN_PROGRESS_COLUMN_ID, { skipKickoff: true });
 				continue;
 			}
@@ -786,9 +946,26 @@ export function useBoardInteractions({
 					? processedStagePromptSessionVersionByKeyRef
 					: processedStageFailurePromptSessionVersionByKeyRef;
 			if (processedRef.current[key] === queued.updatedAt) {
+				logStageAutomation(queued.taskId, "skipping already processed stage prompt", {
+					stageColumnId: queued.stage.columnId,
+					reason: queued.reason,
+					updatedAt: queued.updatedAt,
+				});
 				continue;
 			}
 			processedRef.current[key] = queued.updatedAt;
+			if (queued.reason === "entry") {
+				activeEntryStageColumnByTaskIdRef.current[queued.taskId] = queued.stage.columnId;
+				delete activeEntryStageStartedByTaskIdRef.current[queued.taskId];
+			}
+			logStageAutomation(queued.taskId, "queueing stage prompt send", {
+				stageColumnId: queued.stage.columnId,
+				reason: queued.reason,
+				updatedAt: queued.updatedAt,
+				completionMode: queued.stage.completionMode,
+				passTargetColumnId: queued.stage.passTargetColumnId,
+				failTargetColumnId: queued.stage.failTargetColumnId,
+			});
 			const prompt = queued.reason === "entry" ? queued.stage.promptTemplate : queued.stage.failurePromptTemplate;
 			void (async () => {
 				let lastMessage: string | undefined;
@@ -809,6 +986,13 @@ export function useBoardInteractions({
 				}
 				if (processedRef.current[key] === queued.updatedAt) {
 					delete processedRef.current[key];
+				}
+				if (
+					queued.reason === "entry" &&
+					activeEntryStageColumnByTaskIdRef.current[queued.taskId] === queued.stage.columnId
+				) {
+					delete activeEntryStageColumnByTaskIdRef.current[queued.taskId];
+					delete activeEntryStageStartedByTaskIdRef.current[queued.taskId];
 				}
 				showAppToast({
 					intent: "danger",
@@ -1195,6 +1379,9 @@ export function useBoardInteractions({
 		processedStagePromptSessionVersionByKeyRef.current = {};
 		handledStageFailureSessionVersionByKeyRef.current = {};
 		processedStageFailurePromptSessionVersionByKeyRef.current = {};
+		activeEntryStageColumnByTaskIdRef.current = {};
+		activeEntryStageStartedByTaskIdRef.current = {};
+		activeStageFailureByTaskIdRef.current = {};
 		moveToTrashLoadingByIdRef.current = {};
 		setMoveToTrashLoadingById({});
 		for (const taskId of Object.keys(pendingProgrammaticStartMoveCompletionByTaskIdRef.current)) {

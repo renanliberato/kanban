@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useBoardInteractions } from "@/hooks/use-board-interactions";
 import type { UseTaskSessionsResult } from "@/hooks/use-task-sessions";
 import type { RuntimeStageAutomationPromptConfig, RuntimeTaskSessionSummary } from "@/runtime/types";
+import { moveTaskToColumn } from "@/state/board-state";
 import type { SendTerminalInputOptions } from "@/terminal/terminal-input";
 import type { BoardCard, BoardData } from "@/types";
 
@@ -68,6 +69,7 @@ const NOOP_RUN_AUTO_REVIEW = async (): Promise<boolean> => false;
 
 interface HookSnapshot {
 	board?: BoardData;
+	setBoard?: Dispatch<SetStateAction<BoardData>>;
 	setSessions?: Dispatch<SetStateAction<Record<string, RuntimeTaskSessionSummary>>>;
 	handleRestoreTaskFromTrash: (taskId: string) => void;
 	handleStartTask: (taskId: string) => void;
@@ -170,6 +172,23 @@ function createAwaitingReviewSession(
 			source: null,
 		},
 		warningMessage: null,
+	};
+}
+
+function createRunningSession(taskId: string, updatedAt: number): RuntimeTaskSessionSummary {
+	return {
+		...createAwaitingReviewSession(taskId, updatedAt, ""),
+		state: "running",
+		reviewReason: null,
+		latestHookActivity: {
+			activityText: "Agent active",
+			toolName: null,
+			toolInputSummary: null,
+			finalMessage: null,
+			hookEventName: "to_in_progress",
+			notificationType: null,
+			source: null,
+		},
 	};
 }
 
@@ -302,6 +321,7 @@ function SessionTransitionHarness({
 	useEffect(() => {
 		onSnapshot({
 			board,
+			setBoard,
 			setSessions,
 			handleRestoreTaskFromTrash: () => {},
 			handleStartTask: () => {},
@@ -675,6 +695,81 @@ describe("useBoardInteractions", () => {
 		});
 	});
 
+	it("keeps failed code review tasks in progress until the failure follow-up starts", async () => {
+		let latestBoard: BoardData | null = null;
+		let latestSetSessions: Dispatch<SetStateAction<Record<string, RuntimeTaskSessionSummary>>> | null = null;
+		const sendTaskSessionInput = vi.fn(async () => ({ ok: true as const }));
+		mockBoardSessionDependencies();
+
+		const task = createTask("task-1", "Task", 1);
+		await act(async () => {
+			root.render(
+				<SessionTransitionHarness
+					initialBoard={createStageBoard("code_review", task)}
+					initialSessions={{ "task-1": createAwaitingReviewSession("task-1", 10, "Done") }}
+					sendTaskSessionInput={sendTaskSessionInput}
+					stageAutomationPrompts={[QA_STAGE_PROMPT, CODE_REVIEW_STAGE_PROMPT, DOCS_OPTIMIZATION_STAGE_PROMPT]}
+					onSnapshot={(snapshot) => {
+						latestBoard = snapshot.board ?? null;
+						latestSetSessions = snapshot.setSessions ?? null;
+					}}
+				/>,
+			);
+		});
+
+		const setSessions = latestSetSessions as Dispatch<
+			SetStateAction<Record<string, RuntimeTaskSessionSummary>>
+		> | null;
+		if (!setSessions) {
+			throw new Error("Expected session setter.");
+		}
+		await act(async () => {
+			setSessions({
+				"task-1": createAwaitingReviewSession("task-1", 11, "Needs fixes.\nCODE REVIEW FAILED"),
+			});
+		});
+
+		const boardAfterFailure = latestBoard as BoardData | null;
+		expect(boardAfterFailure?.columns.find((column) => column.id === "in_progress")?.cards[0]?.id).toBe("task-1");
+		expect(boardAfterFailure?.columns.find((column) => column.id === "qa")?.cards[0]?.id).toBeUndefined();
+
+		await act(async () => {
+			setSessions({
+				"task-1": createAwaitingReviewSession("task-1", 12, "Needs fixes.\nCODE REVIEW FAILED"),
+			});
+		});
+
+		const boardAfterUpdatedAwaitingReview = latestBoard as BoardData | null;
+		expect(boardAfterUpdatedAwaitingReview?.columns.find((column) => column.id === "in_progress")?.cards[0]?.id).toBe(
+			"task-1",
+		);
+		expect(
+			boardAfterUpdatedAwaitingReview?.columns.find((column) => column.id === "qa")?.cards[0]?.id,
+		).toBeUndefined();
+		await act(async () => {
+			vi.advanceTimersByTime(200);
+			await Promise.resolve();
+		});
+		expect(sendTaskSessionInput).toHaveBeenCalledWith("task-1", "fix code review", {
+			appendNewline: false,
+			mode: "paste",
+		});
+
+		await act(async () => {
+			setSessions({
+				"task-1": createRunningSession("task-1", 13),
+			});
+		});
+		await act(async () => {
+			setSessions({
+				"task-1": createAwaitingReviewSession("task-1", 14, "Fix complete."),
+			});
+		});
+
+		const boardAfterFixCompletion = latestBoard as BoardData | null;
+		expect(boardAfterFixCompletion?.columns.find((column) => column.id === "qa")?.cards[0]?.id).toBe("task-1");
+	});
+
 	it("advances through configured stages on pass signals", async () => {
 		let latestBoard: BoardData | null = null;
 		let latestSetSessions: Dispatch<SetStateAction<Record<string, RuntimeTaskSessionSummary>>> | null = null;
@@ -731,6 +826,7 @@ describe("useBoardInteractions", () => {
 
 	it("moves always-pass stages to review after completion without requiring a signal", async () => {
 		let latestBoard: BoardData | null = null;
+		let latestSetBoard: Dispatch<SetStateAction<BoardData>> | null = null;
 		let latestSetSessions: Dispatch<SetStateAction<Record<string, RuntimeTaskSessionSummary>>> | null = null;
 		const sendTaskSessionInput = vi.fn(async () => ({ ok: true as const }));
 		mockBoardSessionDependencies();
@@ -745,6 +841,7 @@ describe("useBoardInteractions", () => {
 					stageAutomationPrompts={[CODE_REVIEW_STAGE_PROMPT, DOCS_OPTIMIZATION_STAGE_PROMPT]}
 					onSnapshot={(snapshot) => {
 						latestBoard = snapshot.board ?? null;
+						latestSetBoard = snapshot.setBoard ?? null;
 						latestSetSessions = snapshot.setSessions ?? null;
 					}}
 				/>,
@@ -756,6 +853,10 @@ describe("useBoardInteractions", () => {
 		> | null;
 		if (!setSessions) {
 			throw new Error("Expected session setter.");
+		}
+		const setBoard = latestSetBoard as Dispatch<SetStateAction<BoardData>> | null;
+		if (!setBoard) {
+			throw new Error("Expected board setter.");
 		}
 		await act(async () => {
 			setSessions({
@@ -777,8 +878,48 @@ describe("useBoardInteractions", () => {
 		});
 
 		await act(async () => {
+			setBoard((currentBoard) => {
+				const moved = moveTaskToColumn(currentBoard, "task-1", "in_progress", { insertAtTop: true });
+				return moved.moved ? moved.board : currentBoard;
+			});
+		});
+		const boardAfterStaleInProgressSync = latestBoard as BoardData | null;
+		expect(
+			boardAfterStaleInProgressSync?.columns.find((column) => column.id === "docs_optimization")?.cards[0]?.id,
+		).toBe("task-1");
+		expect(
+			boardAfterStaleInProgressSync?.columns.find((column) => column.id === "in_progress")?.cards[0]?.id,
+		).toBeUndefined();
+
+		await act(async () => {
 			setSessions({
-				"task-1": createAwaitingReviewSession("task-1", 12, "Updated AGENTS.md with a workflow note."),
+				"task-1": createAwaitingReviewSession("task-1", 12, "No blockers.\nCODE REVIEW PASSED"),
+			});
+		});
+		const boardAfterStaleAwaitingReview = latestBoard as BoardData | null;
+		expect(
+			boardAfterStaleAwaitingReview?.columns.find((column) => column.id === "docs_optimization")?.cards[0]?.id,
+		).toBe("task-1");
+		expect(
+			boardAfterStaleAwaitingReview?.columns.find((column) => column.id === "review")?.cards[0]?.id,
+		).toBeUndefined();
+
+		await act(async () => {
+			setSessions({
+				"task-1": createRunningSession("task-1", 13),
+			});
+		});
+		const boardWhileDocsOptimizationRuns = latestBoard as BoardData | null;
+		expect(
+			boardWhileDocsOptimizationRuns?.columns.find((column) => column.id === "docs_optimization")?.cards[0]?.id,
+		).toBe("task-1");
+		expect(
+			boardWhileDocsOptimizationRuns?.columns.find((column) => column.id === "in_progress")?.cards[0]?.id,
+		).toBeUndefined();
+
+		await act(async () => {
+			setSessions({
+				"task-1": createAwaitingReviewSession("task-1", 14, "Updated AGENTS.md with a workflow note."),
 			});
 		});
 
@@ -786,6 +927,87 @@ describe("useBoardInteractions", () => {
 		expect(boardAfterDocsOptimization?.columns.find((column) => column.id === "review")?.cards[0]?.id).toBe("task-1");
 		expect(
 			boardAfterDocsOptimization?.columns.find((column) => column.id === "docs_optimization")?.cards[0]?.id,
+		).toBeUndefined();
+	});
+
+	it("keeps running tasks in automated stages instead of moving them back to in progress", async () => {
+		let latestSnapshot: HookSnapshot | null = null;
+		const sendTaskSessionInput = vi.fn(async () => ({ ok: true as const }));
+		mockBoardSessionDependencies();
+
+		const task = createTask("task-1", "Task", 1);
+		await act(async () => {
+			root.render(
+				<SessionTransitionHarness
+					initialBoard={createStageBoard("docs_optimization", task)}
+					initialSessions={{ "task-1": createRunningSession("task-1", 10) }}
+					sendTaskSessionInput={sendTaskSessionInput}
+					stageAutomationPrompts={[DOCS_OPTIMIZATION_STAGE_PROMPT]}
+					onSnapshot={(snapshot) => {
+						latestSnapshot = snapshot;
+					}}
+				/>,
+			);
+		});
+
+		const latestBoard: BoardData | null = (latestSnapshot as HookSnapshot | null)?.board ?? null;
+		expect(latestBoard?.columns.find((column) => column.id === "docs_optimization")?.cards[0]?.id).toBe("task-1");
+		expect(latestBoard?.columns.find((column) => column.id === "in_progress")?.cards[0]?.id).toBeUndefined();
+		expect(sendTaskSessionInput).not.toHaveBeenCalled();
+	});
+
+	it("does not restore active stage tasks after they move to trash", async () => {
+		let latestBoard: BoardData | null = null;
+		let latestSetBoard: Dispatch<SetStateAction<BoardData>> | null = null;
+		let latestSetSessions: Dispatch<SetStateAction<Record<string, RuntimeTaskSessionSummary>>> | null = null;
+		const sendTaskSessionInput = vi.fn(async () => ({ ok: true as const }));
+		mockBoardSessionDependencies();
+
+		const task = createTask("task-1", "Task", 1);
+		await act(async () => {
+			root.render(
+				<SessionTransitionHarness
+					initialBoard={createStageBoard("docs_optimization", task)}
+					initialSessions={{ "task-1": createAwaitingReviewSession("task-1", 10, "Ready") }}
+					sendTaskSessionInput={sendTaskSessionInput}
+					stageAutomationPrompts={[DOCS_OPTIMIZATION_STAGE_PROMPT]}
+					onSnapshot={(snapshot) => {
+						latestBoard = snapshot.board ?? null;
+						latestSetBoard = snapshot.setBoard ?? null;
+						latestSetSessions = snapshot.setSessions ?? null;
+					}}
+				/>,
+			);
+		});
+
+		const setBoard = latestSetBoard as Dispatch<SetStateAction<BoardData>> | null;
+		const setSessions = latestSetSessions as Dispatch<
+			SetStateAction<Record<string, RuntimeTaskSessionSummary>>
+		> | null;
+		if (!setBoard || !setSessions) {
+			throw new Error("Expected board and session setters.");
+		}
+		await act(async () => {
+			vi.advanceTimersByTime(200);
+			await Promise.resolve();
+		});
+
+		await act(async () => {
+			setBoard((currentBoard) => {
+				const moved = moveTaskToColumn(currentBoard, "task-1", "trash", { insertAtTop: true });
+				return moved.moved ? moved.board : currentBoard;
+			});
+		});
+		await act(async () => {
+			setSessions({
+				"task-1": createAwaitingReviewSession("task-1", 11, "Still awaiting review."),
+			});
+		});
+
+		const boardAfterTrash = latestBoard as BoardData | null;
+		expect(boardAfterTrash?.columns.find((column) => column.id === "trash")?.cards[0]?.id).toBe("task-1");
+		expect(
+			boardAfterTrash?.columns.find((column) => column.id === "docs_optimization")?.cards[0]?.id,
 		).toBeUndefined();
 	});
 
