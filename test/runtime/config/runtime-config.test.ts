@@ -10,6 +10,12 @@ import {
 	saveRuntimeConfig,
 	updateRuntimeConfig,
 } from "../../../src/config/runtime-config";
+import {
+	CODE_REVIEW_STAGE_FAILED_SIGNAL,
+	CODE_REVIEW_STAGE_PASSED_SIGNAL,
+	TEST_STAGE_FAILED_SIGNAL,
+	TEST_STAGE_PASSED_SIGNAL,
+} from "../../../src/core/board-columns";
 import { createTempDir } from "../../utilities/temp-dir";
 
 function withTemporaryEnv<T>(
@@ -304,13 +310,88 @@ describe.sequential("runtime-config auto agent selection", () => {
 					readyForReviewNotificationsEnabled?: boolean;
 					commitPromptTemplate?: string;
 					openPrPromptTemplate?: string;
+					stagePromptTemplates?: unknown;
+					stageFailurePromptTemplates?: unknown;
 				};
 				expect(globalPayload.selectedAgentId).toBeUndefined();
 				expect(globalPayload.agentAutonomousModeEnabled).toBeUndefined();
 				expect(globalPayload.readyForReviewNotificationsEnabled).toBeUndefined();
 				expect(globalPayload.commitPromptTemplate).toBeUndefined();
 				expect(globalPayload.openPrPromptTemplate).toBeUndefined();
+				expect(globalPayload.stagePromptTemplates).toBeUndefined();
+				expect(globalPayload.stageFailurePromptTemplates).toBeUndefined();
 				expect(existsSync(join(tempProject, ".cline", "kanban", "config.json"))).toBe(false);
+			});
+		} finally {
+			cleanupProject();
+			cleanupHome();
+		}
+	});
+
+	it("loads and persists stage automation prompt templates", async () => {
+		const { path: tempHome, cleanup: cleanupHome } = createTempDir("kanban-home-runtime-config-stages-");
+		const { path: tempProject, cleanup: cleanupProject } = createTempDir("kanban-project-runtime-config-stages-");
+
+		try {
+			const runtimeConfigDir = join(tempHome, ".cline", "kanban");
+			mkdirSync(runtimeConfigDir, { recursive: true });
+			writeFileSync(
+				join(runtimeConfigDir, "config.json"),
+				JSON.stringify(
+					{
+						testPromptTemplate: "legacy test prompt",
+						codeReviewFailurePromptTemplate: "legacy code review fix prompt",
+					},
+					null,
+					2,
+				),
+				"utf8",
+			);
+
+			await withTemporaryEnv({ home: tempHome }, async () => {
+				const loaded = await loadRuntimeConfig(tempProject);
+				expect(loaded.stageAutomationPrompts.map((prompt) => prompt.columnId)).toEqual(["test", "code_review"]);
+				const testStage = loaded.stageAutomationPrompts.find((prompt) => prompt.columnId === "test");
+				const codeReviewStage = loaded.stageAutomationPrompts.find((prompt) => prompt.columnId === "code_review");
+				expect(testStage).toMatchObject({
+					title: "Test",
+					promptTemplate: "legacy test prompt",
+					passSignal: TEST_STAGE_PASSED_SIGNAL,
+					failSignal: TEST_STAGE_FAILED_SIGNAL,
+					passTargetColumnId: "code_review",
+					failTargetColumnId: "in_progress",
+				});
+				expect(codeReviewStage).toMatchObject({
+					title: "Code Review",
+					failurePromptTemplate: "legacy code review fix prompt",
+					passSignal: CODE_REVIEW_STAGE_PASSED_SIGNAL,
+					failSignal: CODE_REVIEW_STAGE_FAILED_SIGNAL,
+					passTargetColumnId: "review",
+					failTargetColumnId: "in_progress",
+				});
+
+				await updateRuntimeConfig(tempProject, {
+					stagePromptTemplates: {
+						test: "custom test prompt",
+						code_review: codeReviewStage?.promptTemplateDefault ?? "",
+					},
+					stageFailurePromptTemplates: {
+						code_review: "custom code review fix prompt",
+					},
+				});
+
+				const globalPayload = JSON.parse(
+					readFileSync(join(tempHome, ".cline", "kanban", "config.json"), "utf8"),
+				) as {
+					stagePromptTemplates?: Record<string, string>;
+					stageFailurePromptTemplates?: Record<string, string>;
+				};
+				expect(globalPayload.stagePromptTemplates).toEqual({
+					test: "custom test prompt",
+				});
+				expect(globalPayload.stageFailurePromptTemplates).toEqual({
+					code_review: "custom code review fix prompt",
+				});
 			});
 		} finally {
 			cleanupProject();

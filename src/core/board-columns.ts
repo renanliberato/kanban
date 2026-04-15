@@ -43,7 +43,89 @@ const BOARD_BASE_COLUMN_DEFINITIONS: readonly BoardColumnDefinition[] = [
 	},
 ] as const;
 
-export const BOARD_STAGE_COLUMN_DEFINITIONS: readonly BoardColumnDefinition[] = [];
+export const TEST_STAGE_FAILED_SIGNAL = "TEST FAILED";
+export const TEST_STAGE_PASSED_SIGNAL = "TEST PASSED";
+export const CODE_REVIEW_STAGE_FAILED_SIGNAL = "CODE REVIEW FAILED";
+export const CODE_REVIEW_STAGE_PASSED_SIGNAL = "CODE REVIEW PASSED";
+
+const DEFAULT_TEST_STAGE_PROMPT_TEMPLATE = `Run the project's tests relevant to the task and evaluate the result.
+
+Rules:
+- Execute the best available automated tests for the changed behavior.
+- Include the exact test command(s) used.
+- If any test fails, your final line must include: ${TEST_STAGE_FAILED_SIGNAL}
+- If tests pass, your final line must include: ${TEST_STAGE_PASSED_SIGNAL}
+
+Return:
+- Short summary of what was tested
+- Key failures, if any
+- Final line with either ${TEST_STAGE_FAILED_SIGNAL} or ${TEST_STAGE_PASSED_SIGNAL}`;
+
+const DEFAULT_TEST_STAGE_FAILURE_PROMPT_TEMPLATE = `Tests failed. Investigate and fix the failing tests.
+
+Steps:
+1. Reproduce the failure.
+2. Apply the minimal code changes needed to make tests pass.
+3. Re-run the relevant tests.
+4. Summarize what failed and what was fixed.
+
+When finished, hand off for another test run.`;
+
+const DEFAULT_CODE_REVIEW_STAGE_PROMPT_TEMPLATE = `Run the /review skill against the current task changes.
+
+Rules:
+- Treat any finding labeled "blocker" or "should fix" as a failing result.
+- Summarize those blocker/should-fix findings clearly if any exist.
+- If blocker/should-fix findings exist, your final line must include: ${CODE_REVIEW_STAGE_FAILED_SIGNAL}
+- If no blocker/should-fix findings exist, your final line must include: ${CODE_REVIEW_STAGE_PASSED_SIGNAL}
+
+Return:
+- Short summary of the review
+- Blocker/should-fix findings that must be addressed, if any
+- Final line with either ${CODE_REVIEW_STAGE_FAILED_SIGNAL} or ${CODE_REVIEW_STAGE_PASSED_SIGNAL}`;
+
+const DEFAULT_CODE_REVIEW_STAGE_FAILURE_PROMPT_TEMPLATE = `Code review found blocker or should-fix feedback.
+
+Steps:
+1. Review the blocker and should-fix findings carefully.
+2. Apply the minimal code changes needed to address them.
+3. Re-check your work so the task is ready for another /review pass.
+4. Summarize what you fixed.
+
+When finished, hand off for another code review run.`;
+
+export const BOARD_STAGE_COLUMN_DEFINITIONS: readonly BoardColumnDefinition[] = [
+	{
+		id: "test",
+		title: "Test",
+		shortLabel: "TS",
+		kind: "automation_stage",
+		tone: "orange",
+		automation: {
+			promptTemplateDefault: DEFAULT_TEST_STAGE_PROMPT_TEMPLATE,
+			failurePromptTemplateDefault: DEFAULT_TEST_STAGE_FAILURE_PROMPT_TEMPLATE,
+			passSignal: TEST_STAGE_PASSED_SIGNAL,
+			failSignal: TEST_STAGE_FAILED_SIGNAL,
+			legacyPromptTemplateKey: "testPromptTemplate",
+			legacyFailurePromptTemplateKey: "testFailurePromptTemplate",
+		},
+	},
+	{
+		id: "code_review",
+		title: "Code Review",
+		shortLabel: "CR",
+		kind: "automation_stage",
+		tone: "blue",
+		automation: {
+			promptTemplateDefault: DEFAULT_CODE_REVIEW_STAGE_PROMPT_TEMPLATE,
+			failurePromptTemplateDefault: DEFAULT_CODE_REVIEW_STAGE_FAILURE_PROMPT_TEMPLATE,
+			passSignal: CODE_REVIEW_STAGE_PASSED_SIGNAL,
+			failSignal: CODE_REVIEW_STAGE_FAILED_SIGNAL,
+			legacyPromptTemplateKey: "codeReviewPromptTemplate",
+			legacyFailurePromptTemplateKey: "codeReviewFailurePromptTemplate",
+		},
+	},
+] as const;
 
 const BOARD_FINAL_COLUMN_DEFINITIONS: readonly BoardColumnDefinition[] = [
 	{

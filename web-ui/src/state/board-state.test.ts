@@ -51,6 +51,17 @@ afterEach(() => {
 });
 
 describe("board dependency state", () => {
+	it("creates the configured board workflow columns in order", () => {
+		expect(createInitialBoardData().columns.map((column) => column.id)).toEqual([
+			"backlog",
+			"in_progress",
+			"test",
+			"code_review",
+			"review",
+			"trash",
+		]);
+	});
+
 	it("creates tasks when randomUUID is unavailable", () => {
 		vi.stubGlobal("crypto", { randomUUID: undefined });
 

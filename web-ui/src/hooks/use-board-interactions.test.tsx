@@ -231,7 +231,7 @@ function SessionTransitionHarness({
 		input: string,
 		options?: SendTerminalInputOptions,
 	) => Promise<{ ok: boolean; message?: string }>;
-	stageAutomationPrompts: readonly RuntimeStageAutomationPromptConfig[];
+	stageAutomationPrompts?: readonly RuntimeStageAutomationPromptConfig[];
 	onSnapshot: (snapshot: HookSnapshot) => void;
 }): null {
 	const [board, setBoard] = useState<BoardData>(initialBoard);
@@ -411,7 +411,7 @@ describe("useBoardInteractions", () => {
 		expect(startTaskSession).toHaveBeenCalledWith(backlogTask);
 	});
 
-	it("keeps the original in-progress to review transition when no stage automation is configured", async () => {
+	it("moves to the first workflow stage without sending prompts when stage automation is disabled", async () => {
 		let latestSnapshot: HookSnapshot | null = null;
 		const sendTaskSessionInput = vi.fn(async () => ({ ok: true as const }));
 		mockBoardSessionDependencies();
@@ -421,6 +421,8 @@ describe("useBoardInteractions", () => {
 			columns: [
 				{ id: "backlog", title: "Backlog", cards: [] },
 				{ id: "in_progress", title: "In Progress", cards: [task] },
+				{ id: "test", title: "Test", cards: [] },
+				{ id: "code_review", title: "Code Review", cards: [] },
 				{ id: "review", title: "Review", cards: [] },
 				{ id: "trash", title: "Trash", cards: [] },
 			],
@@ -442,7 +444,7 @@ describe("useBoardInteractions", () => {
 		});
 
 		const latestBoard: BoardData | null = (latestSnapshot as HookSnapshot | null)?.board ?? null;
-		expect(latestBoard?.columns.find((column) => column.id === "review")?.cards[0]?.id).toBe("task-1");
+		expect(latestBoard?.columns.find((column) => column.id === "test")?.cards[0]?.id).toBe("task-1");
 		expect(sendTaskSessionInput).not.toHaveBeenCalled();
 	});
 
@@ -477,6 +479,50 @@ describe("useBoardInteractions", () => {
 			mode: "paste",
 		});
 		expect(sendTaskSessionInput).toHaveBeenCalledWith("task-1", "\r", { appendNewline: false });
+	});
+
+	it("uses the built-in Test and Code Review stages when no stage prompts are injected", async () => {
+		let latestSnapshot: HookSnapshot | null = null;
+		const sendTaskSessionInput = vi.fn(async () => ({ ok: true as const }));
+		mockBoardSessionDependencies();
+
+		const task = createTask("task-1", "Task", 1);
+		const board: BoardData = {
+			columns: [
+				{ id: "backlog", title: "Backlog", cards: [] },
+				{ id: "in_progress", title: "In Progress", cards: [task] },
+				{ id: "test", title: "Test", cards: [] },
+				{ id: "code_review", title: "Code Review", cards: [] },
+				{ id: "review", title: "Review", cards: [] },
+				{ id: "trash", title: "Trash", cards: [] },
+			],
+			dependencies: [],
+		};
+
+		await act(async () => {
+			root.render(
+				<SessionTransitionHarness
+					initialBoard={board}
+					initialSessions={{ "task-1": createAwaitingReviewSession("task-1", 10, "Done") }}
+					sendTaskSessionInput={sendTaskSessionInput}
+					onSnapshot={(snapshot) => {
+						latestSnapshot = snapshot;
+					}}
+				/>,
+			);
+		});
+
+		const latestBoard: BoardData | null = (latestSnapshot as HookSnapshot | null)?.board ?? null;
+		expect(latestBoard?.columns.find((column) => column.id === "test")?.cards[0]?.id).toBe("task-1");
+		await act(async () => {
+			vi.advanceTimersByTime(200);
+			await Promise.resolve();
+		});
+		expect(sendTaskSessionInput).toHaveBeenCalledWith(
+			"task-1",
+			expect.stringContaining("TEST FAILED"),
+			expect.objectContaining({ mode: "paste" }),
+		);
 	});
 
 	it("does not auto-progress a stage on the same completion that entered it", async () => {
