@@ -3,6 +3,7 @@ import { realpathSync } from "node:fs";
 import packageJson from "../../package.json" with { type: "json" };
 
 import type { RuntimeAgentId } from "../core/api-contract";
+import { getBoardColumnDefinitions } from "../core/board-columns";
 import { isHomeAgentSessionId } from "../core/home-agent-session";
 import { resolveKanbanCommandParts } from "../core/kanban-command";
 import { buildShellCommandLine } from "../core/shell";
@@ -127,6 +128,9 @@ export function resolveAppendSystemPromptCommandPrefix(
 export function renderAppendSystemPrompt(commandPrefix: string, options: RenderAppendSystemPromptOptions = {}): string {
 	const kanbanCommand = commandPrefix.trim() || DEFAULT_COMMAND_PREFIX;
 	const selectedAgentId = options.agentId ?? null;
+	const allowedColumns = getBoardColumnDefinitions().map((column) => column.id);
+	const allowedColumnPipeList = allowedColumns.join("|");
+	const allowedColumnMarkdownList = allowedColumns.map((column) => `\`${column}\``).join(", ");
 	return `# Kanban Sidebar
 
 You are the Kanban sidebar agent for this workspace. Help the user interact with their Kanban board directly from this side panel. When the user asks to add tasks, create tasks, break work down, link tasks, or start tasks, prefer using the Kanban CLI yourself instead of describing manual steps.
@@ -182,11 +186,11 @@ All commands return JSON.
 Purpose: list Kanban tasks for a workspace, including auto-review settings and dependency links.
 
 Command:
-\`${kanbanCommand} task list [--project-path <path>] [--column backlog|in_progress|review|trash]\`
+\`${kanbanCommand} task list [--project-path <path>] [--column ${allowedColumnPipeList}]\`
 
 Parameters:
 - \`--project-path <path>\` optional workspace path. If omitted, uses the current working directory workspace.
-- \`--column <value>\` optional filter. Allowed values: \`backlog\`, \`in_progress\`, \`review\`, \`trash\`.
+- \`--column <value>\` optional filter. Allowed values: ${allowedColumnMarkdownList}.
 
 ## task create
 
@@ -229,11 +233,11 @@ Notes:
 Purpose: move a task or an entire column to \`trash\`, stop active sessions if needed, clean up task worktrees, and auto-start any linked backlog tasks that become ready.
 
 Command:
-\`${kanbanCommand} task trash (--task-id <task_id> | --column backlog|in_progress|review|trash) [--project-path <path>]\`
+\`${kanbanCommand} task trash (--task-id <task_id> | --column ${allowedColumnPipeList}) [--project-path <path>]\`
 
 Parameters:
 - \`--task-id <task_id>\` optional single-task target.
-- \`--column <value>\` optional bulk target. Allowed values: \`backlog\`, \`in_progress\`, \`review\`, \`trash\`.
+- \`--column <value>\` optional bulk target. Allowed values: ${allowedColumnMarkdownList}.
 - \`--project-path <path>\` optional workspace path. If not already registered in Kanban, it is auto-added for git repos.
 
 Notes:
@@ -245,11 +249,11 @@ Notes:
 Purpose: permanently delete a task or every task in a column, removing cards, dependency links, and task worktrees.
 
 Command:
-\`${kanbanCommand} task delete (--task-id <task_id> | --column backlog|in_progress|review|trash) [--project-path <path>]\`
+\`${kanbanCommand} task delete (--task-id <task_id> | --column ${allowedColumnPipeList}) [--project-path <path>]\`
 
 Parameters:
 - \`--task-id <task_id>\` optional single-task target.
-- \`--column <value>\` optional bulk target. Allowed values: \`backlog\`, \`in_progress\`, \`review\`, \`trash\`.
+- \`--column <value>\` optional bulk target. Allowed values: ${allowedColumnMarkdownList}.
 - \`--project-path <path>\` optional workspace path. If not already registered in Kanban, it is auto-added for git repos.
 
 Notes:

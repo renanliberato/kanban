@@ -57,6 +57,7 @@ describe("board dependency state", () => {
 			"in_progress",
 			"test",
 			"code_review",
+			"docs_optimization",
 			"review",
 			"trash",
 		]);

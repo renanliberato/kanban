@@ -271,6 +271,7 @@ function buildStageAutomationPrompts(
 			failurePromptTemplateDefault: automation.failurePromptTemplateDefault,
 			passSignal: automation.passSignal,
 			failSignal: automation.failSignal,
+			completionMode: automation.completionMode ?? "signal",
 			passTargetColumnId: resolveStagePassTargetColumnId(definition),
 			failTargetColumnId: resolveStageFailTargetColumnId(definition),
 		});

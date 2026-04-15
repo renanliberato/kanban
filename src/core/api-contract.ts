@@ -914,6 +914,7 @@ export const runtimeStageAutomationPromptConfigSchema = z.object({
 	failurePromptTemplateDefault: z.string(),
 	passSignal: z.string(),
 	failSignal: z.string(),
+	completionMode: z.enum(["signal", "always_pass"]),
 	passTargetColumnId: runtimeBoardColumnIdSchema,
 	failTargetColumnId: runtimeBoardColumnIdSchema,
 });

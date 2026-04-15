@@ -182,6 +182,7 @@ const QA_STAGE_PROMPT: RuntimeStageAutomationPromptConfig = {
 	failurePromptTemplateDefault: "fix qa",
 	passSignal: "QA PASSED",
 	failSignal: "QA FAILED",
+	completionMode: "signal",
 	passTargetColumnId: "security_review",
 	failTargetColumnId: "in_progress",
 };
@@ -195,6 +196,35 @@ const SECURITY_REVIEW_STAGE_PROMPT: RuntimeStageAutomationPromptConfig = {
 	failurePromptTemplateDefault: "fix security review",
 	passSignal: "SECURITY REVIEW PASSED",
 	failSignal: "SECURITY REVIEW FAILED",
+	completionMode: "signal",
+	passTargetColumnId: "review",
+	failTargetColumnId: "in_progress",
+};
+
+const CODE_REVIEW_STAGE_PROMPT: RuntimeStageAutomationPromptConfig = {
+	columnId: "code_review",
+	title: "Code Review",
+	promptTemplate: "run code review",
+	failurePromptTemplate: "fix code review",
+	promptTemplateDefault: "run code review",
+	failurePromptTemplateDefault: "fix code review",
+	passSignal: "CODE REVIEW PASSED",
+	failSignal: "CODE REVIEW FAILED",
+	completionMode: "signal",
+	passTargetColumnId: "docs_optimization",
+	failTargetColumnId: "in_progress",
+};
+
+const DOCS_OPTIMIZATION_STAGE_PROMPT: RuntimeStageAutomationPromptConfig = {
+	columnId: "docs_optimization",
+	title: "Docs Optimization",
+	promptTemplate: "optimize docs",
+	failurePromptTemplate: "docs optimization did not complete",
+	promptTemplateDefault: "optimize docs",
+	failurePromptTemplateDefault: "docs optimization did not complete",
+	passSignal: "DOCS OPTIMIZATION COMPLETE",
+	failSignal: "DOCS OPTIMIZATION FAILED",
+	completionMode: "always_pass",
 	passTargetColumnId: "review",
 	failTargetColumnId: "in_progress",
 };
@@ -205,6 +235,12 @@ function createStageBoard(columnId: string, task: BoardCard): BoardData {
 			{ id: "backlog", title: "Backlog", cards: [] },
 			{ id: "in_progress", title: "In Progress", cards: columnId === "in_progress" ? [task] : [] },
 			{ id: "qa", title: "QA", cards: columnId === "qa" ? [task] : [] },
+			{ id: "code_review", title: "Code Review", cards: columnId === "code_review" ? [task] : [] },
+			{
+				id: "docs_optimization",
+				title: "Docs Optimization",
+				cards: columnId === "docs_optimization" ? [task] : [],
+			},
 			{
 				id: "security_review",
 				title: "Security Review",
@@ -691,6 +727,66 @@ describe("useBoardInteractions", () => {
 		});
 		const boardAfterSecurityPass = latestBoard as BoardData | null;
 		expect(boardAfterSecurityPass?.columns.find((column) => column.id === "review")?.cards[0]?.id).toBe("task-1");
+	});
+
+	it("moves always-pass stages to review after completion without requiring a signal", async () => {
+		let latestBoard: BoardData | null = null;
+		let latestSetSessions: Dispatch<SetStateAction<Record<string, RuntimeTaskSessionSummary>>> | null = null;
+		const sendTaskSessionInput = vi.fn(async () => ({ ok: true as const }));
+		mockBoardSessionDependencies();
+
+		const task = createTask("task-1", "Task", 1);
+		await act(async () => {
+			root.render(
+				<SessionTransitionHarness
+					initialBoard={createStageBoard("code_review", task)}
+					initialSessions={{ "task-1": createAwaitingReviewSession("task-1", 10, "Done") }}
+					sendTaskSessionInput={sendTaskSessionInput}
+					stageAutomationPrompts={[CODE_REVIEW_STAGE_PROMPT, DOCS_OPTIMIZATION_STAGE_PROMPT]}
+					onSnapshot={(snapshot) => {
+						latestBoard = snapshot.board ?? null;
+						latestSetSessions = snapshot.setSessions ?? null;
+					}}
+				/>,
+			);
+		});
+
+		const setSessions = latestSetSessions as Dispatch<
+			SetStateAction<Record<string, RuntimeTaskSessionSummary>>
+		> | null;
+		if (!setSessions) {
+			throw new Error("Expected session setter.");
+		}
+		await act(async () => {
+			setSessions({
+				"task-1": createAwaitingReviewSession("task-1", 11, "No blockers.\nCODE REVIEW PASSED"),
+			});
+		});
+
+		const boardAfterCodeReviewPass = latestBoard as BoardData | null;
+		expect(boardAfterCodeReviewPass?.columns.find((column) => column.id === "docs_optimization")?.cards[0]?.id).toBe(
+			"task-1",
+		);
+		await act(async () => {
+			vi.advanceTimersByTime(200);
+			await Promise.resolve();
+		});
+		expect(sendTaskSessionInput).toHaveBeenCalledWith("task-1", "optimize docs", {
+			appendNewline: false,
+			mode: "paste",
+		});
+
+		await act(async () => {
+			setSessions({
+				"task-1": createAwaitingReviewSession("task-1", 12, "Updated AGENTS.md with a workflow note."),
+			});
+		});
+
+		const boardAfterDocsOptimization = latestBoard as BoardData | null;
+		expect(boardAfterDocsOptimization?.columns.find((column) => column.id === "review")?.cards[0]?.id).toBe("task-1");
+		expect(
+			boardAfterDocsOptimization?.columns.find((column) => column.id === "docs_optimization")?.cards[0]?.id,
+		).toBeUndefined();
 	});
 
 	it("waits for a new backlog card height to settle before starting animation", async () => {

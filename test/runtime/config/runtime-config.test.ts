@@ -13,6 +13,8 @@ import {
 import {
 	CODE_REVIEW_STAGE_FAILED_SIGNAL,
 	CODE_REVIEW_STAGE_PASSED_SIGNAL,
+	DOCS_OPTIMIZATION_STAGE_FAILED_SIGNAL,
+	DOCS_OPTIMIZATION_STAGE_PASSED_SIGNAL,
 	TEST_STAGE_FAILED_SIGNAL,
 	TEST_STAGE_PASSED_SIGNAL,
 } from "../../../src/core/board-columns";
@@ -350,14 +352,22 @@ describe.sequential("runtime-config auto agent selection", () => {
 
 			await withTemporaryEnv({ home: tempHome }, async () => {
 				const loaded = await loadRuntimeConfig(tempProject);
-				expect(loaded.stageAutomationPrompts.map((prompt) => prompt.columnId)).toEqual(["test", "code_review"]);
+				expect(loaded.stageAutomationPrompts.map((prompt) => prompt.columnId)).toEqual([
+					"test",
+					"code_review",
+					"docs_optimization",
+				]);
 				const testStage = loaded.stageAutomationPrompts.find((prompt) => prompt.columnId === "test");
 				const codeReviewStage = loaded.stageAutomationPrompts.find((prompt) => prompt.columnId === "code_review");
+				const docsOptimizationStage = loaded.stageAutomationPrompts.find(
+					(prompt) => prompt.columnId === "docs_optimization",
+				);
 				expect(testStage).toMatchObject({
 					title: "Test",
 					promptTemplate: "legacy test prompt",
 					passSignal: TEST_STAGE_PASSED_SIGNAL,
 					failSignal: TEST_STAGE_FAILED_SIGNAL,
+					completionMode: "signal",
 					passTargetColumnId: "code_review",
 					failTargetColumnId: "in_progress",
 				});
@@ -366,6 +376,15 @@ describe.sequential("runtime-config auto agent selection", () => {
 					failurePromptTemplate: "legacy code review fix prompt",
 					passSignal: CODE_REVIEW_STAGE_PASSED_SIGNAL,
 					failSignal: CODE_REVIEW_STAGE_FAILED_SIGNAL,
+					completionMode: "signal",
+					passTargetColumnId: "docs_optimization",
+					failTargetColumnId: "in_progress",
+				});
+				expect(docsOptimizationStage).toMatchObject({
+					title: "Docs Optimization",
+					passSignal: DOCS_OPTIMIZATION_STAGE_PASSED_SIGNAL,
+					failSignal: DOCS_OPTIMIZATION_STAGE_FAILED_SIGNAL,
+					completionMode: "always_pass",
 					passTargetColumnId: "review",
 					failTargetColumnId: "in_progress",
 				});

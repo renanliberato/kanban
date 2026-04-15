@@ -980,14 +980,12 @@ export function RuntimeSettingsDialog({
 									const stagePromptTemplate =
 										stagePromptTemplates[promptConfig.columnId] ?? promptConfig.promptTemplate;
 									const stageFailurePromptTemplate =
-										stageFailurePromptTemplates[promptConfig.columnId] ??
-										promptConfig.failurePromptTemplate;
+										stageFailurePromptTemplates[promptConfig.columnId] ?? promptConfig.failurePromptTemplate;
+									const usesSignalCompletion = (promptConfig.completionMode ?? "signal") === "signal";
 									return (
 										<div key={promptConfig.columnId} className="mt-3">
 											<div className="flex items-center justify-between gap-2 mb-1">
-												<span className="text-[12px] text-text-secondary">
-													{promptConfig.title} prompt
-												</span>
+												<span className="text-[12px] text-text-secondary">{promptConfig.title} prompt</span>
 												<Button
 													variant="ghost"
 													size="sm"
@@ -1017,42 +1015,55 @@ export function RuntimeSettingsDialog({
 												className="w-full rounded-md border border-border bg-surface-2 p-3 text-[13px] text-text-primary font-mono placeholder:text-text-tertiary focus:border-border-focus focus:outline-none resize-none disabled:opacity-40"
 											/>
 
-											<div className="flex items-center justify-between gap-2 mt-3 mb-1">
-												<span className="text-[12px] text-text-secondary">
-													{promptConfig.title} failure follow-up prompt
-												</span>
-												<Button
-													variant="ghost"
-													size="sm"
-													onClick={() =>
-														handleStageFailurePromptTemplateChange(
-															promptConfig.columnId,
-															promptConfig.failurePromptTemplateDefault,
-														)
-													}
-													disabled={
-														controlsDisabled ||
-														normalizeTemplateForComparison(stageFailurePromptTemplate) ===
-															normalizeTemplateForComparison(promptConfig.failurePromptTemplateDefault)
-													}
-												>
-													Reset
-												</Button>
-											</div>
-											<textarea
-												rows={5}
-												value={stageFailurePromptTemplate}
-												onChange={(event) =>
-													handleStageFailurePromptTemplateChange(promptConfig.columnId, event.target.value)
-												}
-												placeholder={`Prompt sent after ${promptConfig.title} fails.`}
-												disabled={controlsDisabled}
-												className="w-full rounded-md border border-border bg-surface-2 p-3 text-[13px] text-text-primary font-mono placeholder:text-text-tertiary focus:border-border-focus focus:outline-none resize-none disabled:opacity-40"
-											/>
-											<p className="text-text-secondary text-[12px] mt-1 mb-0">
-												Pass: <span className="font-mono">{promptConfig.passSignal}</span>. Failure:{" "}
-												<span className="font-mono">{promptConfig.failSignal}</span>.
-											</p>
+											{usesSignalCompletion ? (
+												<>
+													<div className="flex items-center justify-between gap-2 mt-3 mb-1">
+														<span className="text-[12px] text-text-secondary">
+															{promptConfig.title} failure follow-up prompt
+														</span>
+														<Button
+															variant="ghost"
+															size="sm"
+															onClick={() =>
+																handleStageFailurePromptTemplateChange(
+																	promptConfig.columnId,
+																	promptConfig.failurePromptTemplateDefault,
+																)
+															}
+															disabled={
+																controlsDisabled ||
+																normalizeTemplateForComparison(stageFailurePromptTemplate) ===
+																	normalizeTemplateForComparison(
+																		promptConfig.failurePromptTemplateDefault,
+																	)
+															}
+														>
+															Reset
+														</Button>
+													</div>
+													<textarea
+														rows={5}
+														value={stageFailurePromptTemplate}
+														onChange={(event) =>
+															handleStageFailurePromptTemplateChange(
+																promptConfig.columnId,
+																event.target.value,
+															)
+														}
+														placeholder={`Prompt sent after ${promptConfig.title} fails.`}
+														disabled={controlsDisabled}
+														className="w-full rounded-md border border-border bg-surface-2 p-3 text-[13px] text-text-primary font-mono placeholder:text-text-tertiary focus:border-border-focus focus:outline-none resize-none disabled:opacity-40"
+													/>
+													<p className="text-text-secondary text-[12px] mt-1 mb-0">
+														Pass: <span className="font-mono">{promptConfig.passSignal}</span>. Failure:{" "}
+														<span className="font-mono">{promptConfig.failSignal}</span>.
+													</p>
+												</>
+											) : (
+												<p className="text-text-secondary text-[12px] mt-1 mb-0">
+													Moves to Review when the prompt finishes.
+												</p>
+											)}
 										</div>
 									);
 								})}

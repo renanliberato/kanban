@@ -29,6 +29,7 @@ import { loadWorkspaceContext, mutateWorkspaceState } from "../state/workspace-s
 import type { RuntimeAppRouter } from "../trpc/app-router";
 
 const LIST_TASK_COLUMNS = getBoardColumnDefinitions().map((column) => column.id);
+const LIST_TASK_COLUMN_DESCRIPTION = LIST_TASK_COLUMNS.join(" | ");
 type ListTaskColumn = RuntimeBoardColumnId;
 type TaskCommandTarget = { taskId?: string; column?: ListTaskColumn };
 
@@ -1098,7 +1099,7 @@ export function registerTaskCommand(program: Command): void {
 		.command("list")
 		.description("List Kanban tasks for a workspace.")
 		.option("--project-path <path>", "Workspace path. Defaults to current directory workspace.")
-		.option("--column <column>", "Filter column: backlog | in_progress | review | trash.", parseListColumn)
+		.option("--column <column>", `Filter column: ${LIST_TASK_COLUMN_DESCRIPTION}.`, parseListColumn)
 		.action(async (options: { projectPath?: string; column?: ListTaskColumn }) => {
 			await runTaskCommand(
 				async () =>
@@ -1233,7 +1234,7 @@ export function registerTaskCommand(program: Command): void {
 		.command("trash")
 		.description("Move a task or an entire column to trash and clean up task workspaces.")
 		.option("--task-id <id>", "Task ID.")
-		.option("--column <column>", "Column to bulk-trash: backlog | in_progress | review | trash.", parseListColumn)
+		.option("--column <column>", `Column to bulk-trash: ${LIST_TASK_COLUMN_DESCRIPTION}.`, parseListColumn)
 		.option("--project-path <path>", "Workspace path. Defaults to current directory workspace.")
 		.action(async (options: { taskId?: string; column?: ListTaskColumn; projectPath?: string }) => {
 			await runTaskCommand(
@@ -1251,7 +1252,7 @@ export function registerTaskCommand(program: Command): void {
 		.command("delete")
 		.description("Permanently delete a task or every task in a column.")
 		.option("--task-id <id>", "Task ID to permanently delete.")
-		.option("--column <column>", "Column to bulk-delete: backlog | in_progress | review | trash.", parseListColumn)
+		.option("--column <column>", `Column to bulk-delete: ${LIST_TASK_COLUMN_DESCRIPTION}.`, parseListColumn)
 		.option("--project-path <path>", "Workspace path. Defaults to current directory workspace.")
 		.action(async (options: { taskId?: string; column?: ListTaskColumn; projectPath?: string }) => {
 			await runTaskCommand(

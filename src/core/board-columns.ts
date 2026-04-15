@@ -11,6 +11,7 @@ export interface BoardColumnAutomationDefinition {
 	failurePromptTemplateDefault: string;
 	passSignal: string;
 	failSignal: string;
+	completionMode?: "signal" | "always_pass";
 	passTargetColumnId?: string;
 	failTargetColumnId?: string;
 	legacyPromptTemplateKey?: string;
@@ -47,6 +48,8 @@ export const TEST_STAGE_FAILED_SIGNAL = "TEST FAILED";
 export const TEST_STAGE_PASSED_SIGNAL = "TEST PASSED";
 export const CODE_REVIEW_STAGE_FAILED_SIGNAL = "CODE REVIEW FAILED";
 export const CODE_REVIEW_STAGE_PASSED_SIGNAL = "CODE REVIEW PASSED";
+export const DOCS_OPTIMIZATION_STAGE_FAILED_SIGNAL = "DOCS OPTIMIZATION FAILED";
+export const DOCS_OPTIMIZATION_STAGE_PASSED_SIGNAL = "DOCS OPTIMIZATION COMPLETE";
 
 const DEFAULT_TEST_STAGE_PROMPT_TEMPLATE = `Run the project's tests relevant to the task and evaluate the result.
 
@@ -94,6 +97,35 @@ Steps:
 
 When finished, hand off for another code review run.`;
 
+const DEFAULT_DOCS_OPTIMIZATION_STAGE_PROMPT_TEMPLATE = `Review the full task conversation and final implementation context as a learning pass for future agents.
+
+Goal:
+Identify documentation, AGENTS.md tribal knowledge, Codex/cloud skills, prompts, metadata, or workflow guidance that would have helped avoid confusion, rework, review findings, test failures, wrong assumptions, or slow investigation during this task.
+
+Rules:
+- Do not edit product code.
+- Do not run the application.
+- Do not run broad validation unless it is needed only to inspect documentation tooling.
+- You may update documentation, AGENTS.md, skills, prompt templates, or metadata files when the improvement is concrete and high-signal.
+- Do not add obvious or generic advice.
+- Prefer small, durable notes that a future AI agent can act on.
+- If no worthwhile documentation or metadata improvement exists, explain that briefly and make no file changes.
+
+Process:
+1. Inspect the task conversation, review feedback, test/debug notes, and final outcome.
+2. Identify preventable friction: missing context, undocumented conventions, surprising files, non-obvious workflows, or repeated mistakes.
+3. Apply focused documentation/metadata updates only where they would materially improve future agent performance.
+4. Summarize what was learned and what, if anything, was updated.
+
+Return:
+- Preventable issues found
+- Documentation/skill/metadata updates made, if any
+- Remaining recommendations, if any`;
+
+const DEFAULT_DOCS_OPTIMIZATION_STAGE_FAILURE_PROMPT_TEMPLATE = `The documentation optimization pass did not complete cleanly.
+
+Summarize what prevented the pass from completing, then hand off for review without changing product code.`;
+
 export const BOARD_STAGE_COLUMN_DEFINITIONS: readonly BoardColumnDefinition[] = [
 	{
 		id: "test",
@@ -106,6 +138,7 @@ export const BOARD_STAGE_COLUMN_DEFINITIONS: readonly BoardColumnDefinition[] = 
 			failurePromptTemplateDefault: DEFAULT_TEST_STAGE_FAILURE_PROMPT_TEMPLATE,
 			passSignal: TEST_STAGE_PASSED_SIGNAL,
 			failSignal: TEST_STAGE_FAILED_SIGNAL,
+			completionMode: "signal",
 			legacyPromptTemplateKey: "testPromptTemplate",
 			legacyFailurePromptTemplateKey: "testFailurePromptTemplate",
 		},
@@ -121,8 +154,23 @@ export const BOARD_STAGE_COLUMN_DEFINITIONS: readonly BoardColumnDefinition[] = 
 			failurePromptTemplateDefault: DEFAULT_CODE_REVIEW_STAGE_FAILURE_PROMPT_TEMPLATE,
 			passSignal: CODE_REVIEW_STAGE_PASSED_SIGNAL,
 			failSignal: CODE_REVIEW_STAGE_FAILED_SIGNAL,
+			completionMode: "signal",
 			legacyPromptTemplateKey: "codeReviewPromptTemplate",
 			legacyFailurePromptTemplateKey: "codeReviewFailurePromptTemplate",
+		},
+	},
+	{
+		id: "docs_optimization",
+		title: "Docs Optimization",
+		shortLabel: "DO",
+		kind: "automation_stage",
+		tone: "purple",
+		automation: {
+			promptTemplateDefault: DEFAULT_DOCS_OPTIMIZATION_STAGE_PROMPT_TEMPLATE,
+			failurePromptTemplateDefault: DEFAULT_DOCS_OPTIMIZATION_STAGE_FAILURE_PROMPT_TEMPLATE,
+			passSignal: DOCS_OPTIMIZATION_STAGE_PASSED_SIGNAL,
+			failSignal: DOCS_OPTIMIZATION_STAGE_FAILED_SIGNAL,
+			completionMode: "always_pass",
 		},
 	},
 ] as const;

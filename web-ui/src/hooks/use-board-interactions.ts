@@ -114,6 +114,7 @@ function createDefaultStageAutomationPrompts(): RuntimeStageAutomationPromptConf
 				failurePromptTemplateDefault: automation.failurePromptTemplateDefault,
 				passSignal: automation.passSignal,
 				failSignal: automation.failSignal,
+				completionMode: automation.completionMode ?? "signal",
 				passTargetColumnId,
 				failTargetColumnId,
 			},
@@ -237,6 +238,7 @@ export function useBoardInteractions({
 			automationByColumnId.set(columnId, {
 				...promptConfig,
 				columnId,
+				completionMode: promptConfig.completionMode ?? "signal",
 				passTargetColumnId,
 				failTargetColumnId,
 			});
@@ -706,11 +708,16 @@ export function useBoardInteractions({
 				const hasPassedSignal = finalLineHasSignal(summary, stage.passSignal);
 				logStageAutomation(summary.taskId, "evaluating stage completion", {
 					stageColumnId: stage.columnId,
+					completionMode: stage.completionMode,
 					summaryUpdatedAt: summary.updatedAt,
 					finalLine: getFinalMessageLine(summary),
 					hasPassedSignal,
 					hasFailedSignal,
 				});
+				if (stage.completionMode === "always_pass") {
+					moveTaskForSession(summary, columnId, stage.passTargetColumnId);
+					continue;
+				}
 				if (hasFailedSignal) {
 					handledStageFailureSessionVersionByKeyRef.current[key] = summary.updatedAt;
 					moveTaskForSession(summary, columnId, stage.failTargetColumnId, { skipKickoff: true });
