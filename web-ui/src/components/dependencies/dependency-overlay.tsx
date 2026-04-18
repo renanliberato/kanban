@@ -458,6 +458,7 @@ export function DependencyOverlay({
 		}
 
 		const containerRect = container.getBoundingClientRect();
+		const scrollLeft = container.scrollLeft;
 		const anchors: Record<string, TaskAnchor> = {};
 		const setAnchorFromElement = (cardElement: HTMLElement) => {
 			const taskId = cardElement.dataset.taskId;
@@ -465,8 +466,8 @@ export function DependencyOverlay({
 				return;
 			}
 			const rect = cardElement.getBoundingClientRect();
-			const left = rect.left - containerRect.left;
-			const right = rect.right - containerRect.left;
+			const left = rect.left - containerRect.left + scrollLeft;
+			const right = rect.right - containerRect.left + scrollLeft;
 			const top = rect.top - containerRect.top;
 			const bottom = rect.bottom - containerRect.top;
 			anchors[taskId] = {
@@ -500,7 +501,7 @@ export function DependencyOverlay({
 		}
 
 		const nextLayout: DependencyLayout = {
-			width: containerRect.width,
+			width: Math.max(containerRect.width, container.scrollWidth),
 			height: containerRect.height,
 			anchors,
 		};
@@ -837,12 +838,13 @@ export function DependencyOverlay({
 			return null;
 		}
 		const containerRect = container.getBoundingClientRect();
+		const scrollLeft = container.scrollLeft;
 		const pointerTarget: TaskAnchor = {
-			left: draft.pointerClientX - containerRect.left,
-			right: draft.pointerClientX - containerRect.left,
+			left: draft.pointerClientX - containerRect.left + scrollLeft,
+			right: draft.pointerClientX - containerRect.left + scrollLeft,
 			top: draft.pointerClientY - containerRect.top,
 			bottom: draft.pointerClientY - containerRect.top,
-			centerX: draft.pointerClientX - containerRect.left,
+			centerX: draft.pointerClientX - containerRect.left + scrollLeft,
 			centerY: draft.pointerClientY - containerRect.top,
 			columnId: null,
 		};

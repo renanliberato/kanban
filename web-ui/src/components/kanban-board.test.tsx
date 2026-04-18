@@ -135,6 +135,55 @@ describe("KanbanBoard", () => {
 		}
 	});
 
+	it("scrolls the board horizontally with shift wheel", async () => {
+		const board: BoardData = {
+			columns: [
+				{ id: "backlog", title: "Backlog", cards: [] },
+				{ id: "in_progress", title: "In Progress", cards: [] },
+				{ id: "review", title: "Review", cards: [] },
+				{ id: "trash", title: "Trash", cards: [] },
+			],
+			dependencies: [],
+		};
+
+		await act(async () => {
+			root.render(
+				<KanbanBoard
+					data={board}
+					taskSessions={{}}
+					onCardSelect={() => {}}
+					onCreateTask={() => {}}
+					dependencies={[]}
+					onDragEnd={() => {}}
+				/>,
+			);
+		});
+
+		const boardElement = container.querySelector<HTMLElement>(".kb-board");
+		if (!boardElement) {
+			throw new Error("Expected board element.");
+		}
+
+		const shiftWheelEvent = new WheelEvent("wheel", {
+			deltaY: 120,
+			shiftKey: true,
+			cancelable: true,
+			bubbles: true,
+		});
+		boardElement.dispatchEvent(shiftWheelEvent);
+
+		expect(boardElement.scrollLeft).toBe(120);
+
+		const regularWheelEvent = new WheelEvent("wheel", {
+			deltaY: 80,
+			cancelable: true,
+			bubbles: true,
+		});
+		boardElement.dispatchEvent(regularWheelEvent);
+
+		expect(boardElement.scrollLeft).toBe(120);
+	});
+
 	it("marks the board while a programmatic move is active", async () => {
 		const dragActions = {
 			isActive: vi.fn(() => true),

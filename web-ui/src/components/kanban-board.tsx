@@ -9,7 +9,7 @@ import {
 	type SnapDragActions,
 } from "@hello-pangea/dnd";
 import { getBoardColumnOrderIndex } from "@runtime-board-columns";
-import type { ReactNode } from "react";
+import type { ReactNode, WheelEvent as ReactWheelEvent } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { BoardColumn } from "@/components/board-column";
@@ -360,6 +360,18 @@ export function KanbanBoard({
 		[clearProgrammaticCardMoveInFlight, onDragEnd],
 	);
 
+	const handleBoardWheel = useCallback((event: ReactWheelEvent<HTMLElement>) => {
+		if (!event.shiftKey) {
+			return;
+		}
+		const horizontalDelta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+		if (horizontalDelta === 0) {
+			return;
+		}
+		event.preventDefault();
+		event.currentTarget.scrollLeft += horizontalDelta;
+	}, []);
+
 	// Dependency links should reroute as soon as motion starts, not only after drop.
 	// Treat the active card as already belonging to its destination/effective column
 	// so the edge transition can animate alongside the move.
@@ -378,6 +390,7 @@ export function KanbanBoard({
 				ref={boardRef}
 				className="kb-board kb-dependency-surface"
 				data-programmatic-card-move={programmaticCardMoveInFlight ? "true" : undefined}
+				onWheel={handleBoardWheel}
 			>
 				{data.columns.map((column) => (
 					<BoardColumn

@@ -287,12 +287,20 @@ body,
 /* -- Shared layout -- */
 
 .kb-board {
+	--kb-board-column-min-width: 280px;
+
 	display: flex;
 	flex: 1 1 0;
 	min-height: 0;
-	overflow: hidden;
+	overflow-x: auto;
+	overflow-y: hidden;
 	gap: 8px;
 	padding: 8px;
+}
+
+.kb-board-column {
+	flex: 1 0 var(--kb-board-column-min-width);
+	min-width: var(--kb-board-column-min-width);
 }
 
 .kb-dependency-surface {
