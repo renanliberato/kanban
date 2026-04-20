@@ -15,6 +15,8 @@ import {
 	CODE_REVIEW_STAGE_PASSED_SIGNAL,
 	DOCS_OPTIMIZATION_STAGE_FAILED_SIGNAL,
 	DOCS_OPTIMIZATION_STAGE_PASSED_SIGNAL,
+	PLAN_STAGE_FAILED_SIGNAL,
+	PLAN_STAGE_PASSED_SIGNAL,
 	TEST_STAGE_FAILED_SIGNAL,
 	TEST_STAGE_PASSED_SIGNAL,
 } from "../../../src/core/board-columns";
@@ -353,15 +355,26 @@ describe.sequential("runtime-config auto agent selection", () => {
 			await withTemporaryEnv({ home: tempHome }, async () => {
 				const loaded = await loadRuntimeConfig(tempProject);
 				expect(loaded.stageAutomationPrompts.map((prompt) => prompt.columnId)).toEqual([
+					"plan",
 					"test",
 					"code_review",
 					"docs_optimization",
 				]);
+				const planStage = loaded.stageAutomationPrompts.find((prompt) => prompt.columnId === "plan");
 				const testStage = loaded.stageAutomationPrompts.find((prompt) => prompt.columnId === "test");
 				const codeReviewStage = loaded.stageAutomationPrompts.find((prompt) => prompt.columnId === "code_review");
 				const docsOptimizationStage = loaded.stageAutomationPrompts.find(
 					(prompt) => prompt.columnId === "docs_optimization",
 				);
+				expect(planStage).toMatchObject({
+					title: "Plan",
+					passSignal: PLAN_STAGE_PASSED_SIGNAL,
+					failSignal: PLAN_STAGE_FAILED_SIGNAL,
+					completionMode: "always_pass",
+					passTargetColumnId: "plan_review",
+					failTargetColumnId: "in_progress",
+				});
+				expect(planStage?.promptTemplate).toContain("{{task_prompt}}");
 				expect(testStage).toMatchObject({
 					title: "Test",
 					promptTemplate: "legacy test prompt",

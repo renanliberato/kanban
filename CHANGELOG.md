@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.1.64]
+
+- Added Plan and Plan Review stages to the board workflow: tasks can now go through an automated planning step before implementation, with the resulting plan landing in a dedicated review column
+
 ## [0.1.63]
 
 - Fixed task detail view being lost on page refresh

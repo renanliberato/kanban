@@ -1,3 +1,4 @@
+import { isTaskWorkspaceColumnId } from "@runtime-board-columns";
 import type { Dispatch, SetStateAction } from "react";
 import { useCallback, useEffect, useState } from "react";
 
@@ -23,25 +24,29 @@ export interface UseTaskStartActionsResult {
 
 export function getStartableBacklogTaskIds(board: BoardData): string[] {
 	const allBacklogTasks = new Set<string>();
-	const allInProgressTasks = new Set<string>();
+	const allActiveWorkflowTasks = new Set<string>();
 	const startableTaskIds: string[] = [];
 
 	const backlogCards = board.columns.find((column) => column.id === "backlog")?.cards;
-	const inProgressTasks = board.columns.find((column) => column.id === "in_progress")?.cards;
 
 	backlogCards?.forEach((card) => {
 		allBacklogTasks.add(card.id);
 	});
-	inProgressTasks?.forEach((card) => {
-		allInProgressTasks.add(card.id);
-	});
+	for (const column of board.columns) {
+		if (!isTaskWorkspaceColumnId(column.id)) {
+			continue;
+		}
+		for (const card of column.cards) {
+			allActiveWorkflowTasks.add(card.id);
+		}
+	}
 
 	backlogCards?.forEach((card) => {
 		const dependency = board.dependencies.find((d) => d.fromTaskId === card.id);
 		const isChildTaskInBacklog = dependency && allBacklogTasks.has(dependency.toTaskId);
-		const isChildTaskInProgress = dependency && allInProgressTasks.has(dependency.toTaskId);
+		const isChildTaskActive = dependency && allActiveWorkflowTasks.has(dependency.toTaskId);
 
-		if (!isChildTaskInBacklog && !isChildTaskInProgress) {
+		if (!isChildTaskInBacklog && !isChildTaskActive) {
 			startableTaskIds.push(card.id);
 		}
 	});

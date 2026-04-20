@@ -21,15 +21,19 @@ describe("getStartableBacklogTaskIds", () => {
 	function createBoard({
 		backlogCards,
 		dependencies = [],
+		planCards = [],
 		inProgressCards = [],
 	}: {
 		backlogCards: BoardCard[];
 		dependencies?: BoardDependency[];
+		planCards?: BoardCard[];
 		inProgressCards?: BoardCard[];
 	}): BoardData {
 		return {
 			columns: [
 				{ id: "backlog", title: "Backlog", cards: backlogCards },
+				{ id: "plan", title: "Plan", cards: planCards },
+				{ id: "plan_review", title: "Plan Review", cards: [] },
 				{ id: "in_progress", title: "In Progress", cards: inProgressCards },
 				{ id: "review", title: "Review", cards: [] },
 				{ id: "trash", title: "Trash", cards: [] },
@@ -61,6 +65,15 @@ describe("getStartableBacklogTaskIds", () => {
 			backlogCards: [createCard("task-a")],
 			dependencies: [{ id: "dep-1", fromTaskId: "task-a", toTaskId: "task-b", createdAt: 1 }],
 			inProgressCards: [createCard("task-b")],
+		});
+		expect(getStartableBacklogTaskIds(board)).toEqual([]);
+	});
+
+	it("excludes a parent task whose child is in plan", () => {
+		const board = createBoard({
+			backlogCards: [createCard("task-a")],
+			dependencies: [{ id: "dep-1", fromTaskId: "task-a", toTaskId: "task-b", createdAt: 1 }],
+			planCards: [createCard("task-b")],
 		});
 		expect(getStartableBacklogTaskIds(board)).toEqual([]);
 	});

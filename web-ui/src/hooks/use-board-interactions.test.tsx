@@ -53,6 +53,8 @@ function createBoard(): BoardData {
 				title: "Backlog",
 				cards: [createTask("task-1", "Backlog task", 1)],
 			},
+			{ id: "plan", title: "Plan", cards: [] },
+			{ id: "plan_review", title: "Plan Review", cards: [] },
 			{ id: "in_progress", title: "In Progress", cards: [] },
 			{ id: "review", title: "Review", cards: [] },
 			{ id: "trash", title: "Trash", cards: [] },
@@ -74,6 +76,7 @@ interface HookSnapshot {
 	handleRestoreTaskFromTrash: (taskId: string) => void;
 	handleStartTask: (taskId: string) => void;
 	handleCardSelect: (taskId: string) => void;
+	handlePlanReviewPromptSubmission?: (taskId: string, text: string) => string;
 }
 
 function createRect(width: number, height: number): DOMRect {
@@ -95,6 +98,7 @@ function HookHarness({
 	setBoard,
 	ensureTaskWorkspace,
 	startTaskSession,
+	stageAutomationPrompts,
 	selectedCard = null,
 	setSelectedTaskIdOverride,
 	onSnapshot,
@@ -103,7 +107,11 @@ function HookHarness({
 	setBoard: Dispatch<SetStateAction<BoardData>>;
 	ensureTaskWorkspace: UseTaskSessionsResult["ensureTaskWorkspace"];
 	startTaskSession: UseTaskSessionsResult["startTaskSession"];
-	selectedCard?: { card: BoardCard; column: { id: "backlog" | "in_progress" | "review" | "trash" } } | null;
+	stageAutomationPrompts?: readonly RuntimeStageAutomationPromptConfig[];
+	selectedCard?: {
+		card: BoardCard;
+		column: { id: "backlog" | "plan" | "plan_review" | "in_progress" | "review" | "trash" };
+	} | null;
 	setSelectedTaskIdOverride?: Dispatch<SetStateAction<string | null>>;
 	onSnapshot?: (snapshot: HookSnapshot) => void;
 }): null {
@@ -130,6 +138,7 @@ function HookHarness({
 		fetchTaskWorkspaceInfo: NOOP_FETCH_WORKSPACE_INFO,
 		sendTaskSessionInput: NOOP_SEND_TASK_INPUT,
 		readyForReviewNotificationsEnabled: false,
+		stageAutomationPrompts,
 		taskGitActionLoadingByTaskId: {},
 		runAutoReviewGitAction: NOOP_RUN_AUTO_REVIEW,
 	});
@@ -139,8 +148,15 @@ function HookHarness({
 			handleRestoreTaskFromTrash: actions.handleRestoreTaskFromTrash,
 			handleStartTask: actions.handleStartTask,
 			handleCardSelect: actions.handleCardSelect,
+			handlePlanReviewPromptSubmission: actions.handlePlanReviewPromptSubmission,
 		});
-	}, [actions.handleCardSelect, actions.handleRestoreTaskFromTrash, actions.handleStartTask, onSnapshot]);
+	}, [
+		actions.handleCardSelect,
+		actions.handlePlanReviewPromptSubmission,
+		actions.handleRestoreTaskFromTrash,
+		actions.handleStartTask,
+		onSnapshot,
+	]);
 
 	return null;
 }
@@ -248,10 +264,26 @@ const DOCS_OPTIMIZATION_STAGE_PROMPT: RuntimeStageAutomationPromptConfig = {
 	failTargetColumnId: "in_progress",
 };
 
+const PLAN_STAGE_PROMPT: RuntimeStageAutomationPromptConfig = {
+	columnId: "plan",
+	title: "Plan",
+	promptTemplate: "Plan this task:\n{{task_prompt}}",
+	failurePromptTemplate: "planning failed",
+	promptTemplateDefault: "Plan this task:\n{{task_prompt}}",
+	failurePromptTemplateDefault: "planning failed",
+	passSignal: "PLAN COMPLETE",
+	failSignal: "PLAN FAILED",
+	completionMode: "always_pass",
+	passTargetColumnId: "plan_review",
+	failTargetColumnId: "in_progress",
+};
+
 function createStageBoard(columnId: string, task: BoardCard): BoardData {
 	return {
 		columns: [
 			{ id: "backlog", title: "Backlog", cards: [] },
+			{ id: "plan", title: "Plan", cards: columnId === "plan" ? [task] : [] },
+			{ id: "plan_review", title: "Plan Review", cards: columnId === "plan_review" ? [task] : [] },
 			{ id: "in_progress", title: "In Progress", cards: columnId === "in_progress" ? [task] : [] },
 			{ id: "qa", title: "QA", cards: columnId === "qa" ? [task] : [] },
 			{ id: "code_review", title: "Code Review", cards: columnId === "code_review" ? [task] : [] },
@@ -295,7 +327,7 @@ function SessionTransitionHarness({
 	const [, setIsClearTrashDialogOpen] = useState(false);
 	const [, setIsGitHistoryOpen] = useState(false);
 
-	useBoardInteractions({
+	const actions = useBoardInteractions({
 		board,
 		setBoard,
 		sessions,
@@ -326,8 +358,9 @@ function SessionTransitionHarness({
 			handleRestoreTaskFromTrash: () => {},
 			handleStartTask: () => {},
 			handleCardSelect: () => {},
+			handlePlanReviewPromptSubmission: actions.handlePlanReviewPromptSubmission,
 		});
-	}, [board, onSnapshot, setSessions]);
+	}, [actions.handlePlanReviewPromptSubmission, board, onSnapshot, setSessions]);
 
 	return null;
 }
@@ -464,7 +497,58 @@ describe("useBoardInteractions", () => {
 
 		expect(started).toBe(true);
 		expect(ensureTaskWorkspace).toHaveBeenCalledWith(backlogTask);
-		expect(startTaskSession).toHaveBeenCalledWith(backlogTask);
+		expect(startTaskSession).toHaveBeenCalledWith(backlogTask, {
+			promptOverride: expect.stringContaining("Backlog task"),
+		});
+	});
+
+	it("starts backlog tasks in plan with the rendered plan prompt", async () => {
+		let latestSnapshot: HookSnapshot | null = null;
+		mockBoardSessionDependencies();
+
+		const board = createBoard();
+		let currentBoard = board;
+		const setBoard = vi.fn<Dispatch<SetStateAction<BoardData>>>((nextBoard) => {
+			currentBoard = typeof nextBoard === "function" ? nextBoard(currentBoard) : nextBoard;
+		});
+		const ensureTaskWorkspace = vi.fn(async () => ({ ok: true as const }));
+		const startTaskSession = vi.fn(async () => ({ ok: true as const }));
+
+		await act(async () => {
+			root.render(
+				<HookHarness
+					board={board}
+					setBoard={setBoard}
+					ensureTaskWorkspace={ensureTaskWorkspace}
+					startTaskSession={startTaskSession}
+					stageAutomationPrompts={[
+						{
+							...PLAN_STAGE_PROMPT,
+							promptTemplate: "Plan first.",
+						},
+					]}
+					onSnapshot={(snapshot) => {
+						latestSnapshot = snapshot;
+					}}
+				/>,
+			);
+		});
+
+		if (!latestSnapshot) {
+			throw new Error("Expected a hook snapshot.");
+		}
+
+		await act(async () => {
+			latestSnapshot!.handleStartTask("task-1");
+			for (let i = 0; i < 10; i++) {
+				await Promise.resolve();
+			}
+		});
+
+		expect(currentBoard.columns.find((column) => column.id === "plan")?.cards[0]?.id).toBe("task-1");
+		expect(startTaskSession).toHaveBeenCalledWith(board.columns[0]!.cards[0]!, {
+			promptOverride: "Plan first.\n\nTask prompt:\nBacklog task",
+		});
 	});
 
 	it("moves to the first workflow stage without sending prompts when stage automation is disabled", async () => {
@@ -535,6 +619,100 @@ describe("useBoardInteractions", () => {
 			mode: "paste",
 		});
 		expect(sendTaskSessionInput).toHaveBeenCalledWith("task-1", "\r", { appendNewline: false });
+	});
+
+	it("routes REVIEW PLAN prompts from plan review back to plan without sending the automatic plan prompt", async () => {
+		let latestBoard: BoardData | null = null;
+		let latestSetSessions: Dispatch<SetStateAction<Record<string, RuntimeTaskSessionSummary>>> | null = null;
+		let latestHandlePlanReviewPromptSubmission: HookSnapshot["handlePlanReviewPromptSubmission"] | null = null;
+		const sendTaskSessionInput = vi.fn(async () => ({ ok: true as const }));
+		mockBoardSessionDependencies();
+
+		const task = createTask("task-1", "Task", 1);
+		await act(async () => {
+			root.render(
+				<SessionTransitionHarness
+					initialBoard={createStageBoard("plan_review", task)}
+					initialSessions={{ "task-1": createAwaitingReviewSession("task-1", 10, "Plan ready") }}
+					sendTaskSessionInput={sendTaskSessionInput}
+					stageAutomationPrompts={[PLAN_STAGE_PROMPT]}
+					onSnapshot={(snapshot) => {
+						latestBoard = snapshot.board ?? null;
+						latestSetSessions = snapshot.setSessions ?? null;
+						latestHandlePlanReviewPromptSubmission = snapshot.handlePlanReviewPromptSubmission ?? null;
+					}}
+				/>,
+			);
+		});
+
+		if (!latestHandlePlanReviewPromptSubmission || !latestSetSessions) {
+			throw new Error("Expected plan review handler and session setter.");
+		}
+
+		await act(async () => {
+			latestHandlePlanReviewPromptSubmission!("task-1", " review plan tighten the tests");
+		});
+
+		const boardAfterReplanRequest = latestBoard as BoardData | null;
+		expect(boardAfterReplanRequest?.columns.find((column) => column.id === "plan")?.cards[0]?.id).toBe("task-1");
+
+		await act(async () => {
+			latestSetSessions!({
+				"task-1": createRunningSession("task-1", 11),
+			});
+		});
+		await act(async () => {
+			latestSetSessions!({
+				"task-1": createAwaitingReviewSession("task-1", 12, "Updated plan"),
+			});
+		});
+
+		const boardAfterReplanCompletion = latestBoard as BoardData | null;
+		expect(boardAfterReplanCompletion?.columns.find((column) => column.id === "plan_review")?.cards[0]?.id).toBe(
+			"task-1",
+		);
+		await act(async () => {
+			vi.advanceTimersByTime(200);
+			await Promise.resolve();
+		});
+		expect(sendTaskSessionInput).not.toHaveBeenCalled();
+	});
+
+	it("routes non-review plan prompts from plan review to in progress", async () => {
+		let latestBoard: BoardData | null = null;
+		let latestHandlePlanReviewPromptSubmission: HookSnapshot["handlePlanReviewPromptSubmission"] | null = null;
+		const sendTaskSessionInput = vi.fn(async () => ({ ok: true as const }));
+		mockBoardSessionDependencies();
+
+		const task = createTask("task-1", "Task", 1);
+		await act(async () => {
+			root.render(
+				<SessionTransitionHarness
+					initialBoard={createStageBoard("plan_review", task)}
+					initialSessions={{ "task-1": createAwaitingReviewSession("task-1", 10, "Plan ready") }}
+					sendTaskSessionInput={sendTaskSessionInput}
+					stageAutomationPrompts={[PLAN_STAGE_PROMPT]}
+					onSnapshot={(snapshot) => {
+						latestBoard = snapshot.board ?? null;
+						latestHandlePlanReviewPromptSubmission = snapshot.handlePlanReviewPromptSubmission ?? null;
+					}}
+				/>,
+			);
+		});
+
+		if (!latestHandlePlanReviewPromptSubmission) {
+			throw new Error("Expected plan review handler.");
+		}
+
+		await act(async () => {
+			latestHandlePlanReviewPromptSubmission!("task-1", "Implement it now");
+		});
+
+		const boardAfterImplementationPrompt = latestBoard as BoardData | null;
+		expect(boardAfterImplementationPrompt?.columns.find((column) => column.id === "in_progress")?.cards[0]?.id).toBe(
+			"task-1",
+		);
+		expect(sendTaskSessionInput).not.toHaveBeenCalled();
 	});
 
 	it("uses the built-in Test and Code Review stages when no stage prompts are injected", async () => {
@@ -1097,7 +1275,7 @@ describe("useBoardInteractions", () => {
 			await Promise.resolve();
 		});
 
-		expect(tryProgrammaticCardMove).toHaveBeenCalledWith("task-1", "backlog", "in_progress");
+		expect(tryProgrammaticCardMove).toHaveBeenCalledWith("task-1", "backlog", "plan");
 		boardElement.remove();
 	});
 
@@ -1177,7 +1355,9 @@ describe("useBoardInteractions", () => {
 		expect(tryProgrammaticCardMove).not.toHaveBeenCalled();
 		expect(measurementCount).toBe(0);
 		expect(setBoard).toHaveBeenCalled();
-		expect(startTaskSession).toHaveBeenCalledWith(board.columns[0]!.cards[0]!);
+		expect(startTaskSession).toHaveBeenCalledWith(board.columns[0]!.cards[0]!, {
+			promptOverride: expect.stringContaining("Backlog task"),
+		});
 		boardElement.remove();
 	});
 

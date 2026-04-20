@@ -3,6 +3,11 @@ import { describe, expect, it } from "vitest";
 import { isCardDropDisabled, type ProgrammaticCardMoveInFlight } from "@/state/drag-rules";
 
 describe("drag rules", () => {
+	it("allows backlog tasks to start only by moving to plan", () => {
+		expect(isCardDropDisabled("plan", "backlog")).toBe(false);
+		expect(isCardDropDisabled("in_progress", "backlog")).toBe(true);
+	});
+
 	it("keeps manual in-progress to review drops disabled", () => {
 		expect(isCardDropDisabled("review", "in_progress")).toBe(true);
 	});

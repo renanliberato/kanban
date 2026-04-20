@@ -575,6 +575,7 @@ export default function App(): ReactElement {
 		handleConfirmClearTrash,
 		handleAddReviewComments,
 		handleSendReviewComments,
+		handlePlanReviewPromptSubmission,
 		moveToTrashLoadingById,
 		trashTaskCount,
 	} = useBoardInteractions({
@@ -599,6 +600,17 @@ export default function App(): ReactElement {
 		taskGitActionLoadingByTaskId,
 		runAutoReviewGitAction,
 	});
+	const handleSendClineChatMessage = useCallback(
+		(
+			taskId: string,
+			text: string,
+			options?: Parameters<typeof sendTaskChatMessage>[2],
+		): ReturnType<typeof sendTaskChatMessage> => {
+			handlePlanReviewPromptSubmission(taskId, text);
+			return sendTaskChatMessage(taskId, text, options);
+		},
+		[handlePlanReviewPromptSubmission, sendTaskChatMessage],
+	);
 
 	const {
 		handleCreateAndStartTask,
@@ -1048,7 +1060,7 @@ export default function App(): ReactElement {
 									onSendReviewComments={(taskId: string, text: string) => {
 										void handleSendReviewComments(taskId, text);
 									}}
-									onSendClineChatMessage={sendTaskChatMessage}
+									onSendClineChatMessage={handleSendClineChatMessage}
 									onCancelClineChatTurn={cancelTaskChatTurn}
 									onLoadClineChatMessages={fetchTaskChatMessages}
 									latestClineChatMessage={latestSelectedTaskChatMessage}

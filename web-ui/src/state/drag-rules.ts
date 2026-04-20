@@ -3,6 +3,7 @@ import {
 	IN_PROGRESS_COLUMN_ID,
 	isStageColumnId,
 	isTaskWorkspaceColumnId,
+	PLAN_COLUMN_ID,
 	REVIEW_COLUMN_ID,
 	TRASH_COLUMN_ID,
 } from "@runtime-board-columns";
@@ -38,7 +39,7 @@ export function isAllowedCrossColumnCardMove(
 		programmaticCardMoveInFlight?: ProgrammaticCardMoveInFlight | null;
 	},
 ): boolean {
-	if (fromColumnId === BACKLOG_COLUMN_ID && toColumnId === IN_PROGRESS_COLUMN_ID) {
+	if (fromColumnId === BACKLOG_COLUMN_ID && toColumnId === PLAN_COLUMN_ID) {
 		return true;
 	}
 	if (toColumnId === TRASH_COLUMN_ID && fromColumnId !== TRASH_COLUMN_ID) {
@@ -84,11 +85,17 @@ export function isCardDropDisabled(
 			programmaticCardMoveInFlight: options?.programmaticCardMoveInFlight,
 		});
 	}
+	if (isTaskWorkspaceColumnId(columnId) && columnId !== IN_PROGRESS_COLUMN_ID) {
+		return !isAllowedCrossColumnCardMove(activeDragSourceColumnId, columnId, {
+			taskId: options?.activeDragTaskId,
+			programmaticCardMoveInFlight: options?.programmaticCardMoveInFlight,
+		});
+	}
 	if (columnId === BACKLOG_COLUMN_ID) {
 		return activeDragSourceColumnId !== BACKLOG_COLUMN_ID;
 	}
 	if (columnId === IN_PROGRESS_COLUMN_ID) {
-		if (activeDragSourceColumnId === BACKLOG_COLUMN_ID || activeDragSourceColumnId === IN_PROGRESS_COLUMN_ID) {
+		if (activeDragSourceColumnId === IN_PROGRESS_COLUMN_ID) {
 			return false;
 		}
 		return !isAllowedCrossColumnCardMove(activeDragSourceColumnId, columnId, {

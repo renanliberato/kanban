@@ -6,7 +6,6 @@ import { getDetailTerminalTaskId } from "@/hooks/use-terminal-panels";
 import {
 	addTaskDependency,
 	findCardSelection,
-	moveTaskToColumn,
 	removeTaskDependency,
 	trashTaskAndGetReadyLinkedTaskIds,
 } from "@/state/board-state";
@@ -140,21 +139,9 @@ export function useLinkedBacklogTaskActions({
 					const startedTasks = await Promise.all(startedTaskPromises);
 					startedTaskCount = startedTasks.filter(Boolean).length;
 				} else {
-					setBoard((currentBoardState) => {
-						let nextBoardState = currentBoardState;
-						for (const readyTask of readyTasks) {
-							const moved = moveTaskToColumn(nextBoardState, readyTask.id, "in_progress", {
-								insertAtTop: true,
-							});
-							if (moved.moved) {
-								nextBoardState = moved.board;
-							}
-						}
-						return nextBoardState;
-					});
 					for (const readyTask of readyTasks) {
 						const started = await kickoffTaskInProgress(readyTask, readyTask.id, "backlog", {
-							optimisticMove: true,
+							optimisticMove: false,
 						});
 						if (started) {
 							startedTaskCount += 1;

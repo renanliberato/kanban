@@ -10,6 +10,8 @@ import {
 	createEmptyProjectTaskCounts as createConfiguredEmptyProjectTaskCounts,
 	getFirstPostInProgressColumnId,
 	normalizeBoardColumnId,
+	PLAN_COLUMN_ID,
+	PLAN_REVIEW_COLUMN_ID,
 	TRASH_COLUMN_ID,
 } from "../core/board-columns";
 import {
@@ -143,6 +145,11 @@ function applyLiveSessionStateToProjectTaskCounts(
 	for (const summary of Object.values(sessionSummaries)) {
 		const columnId = taskColumnById.get(summary.taskId);
 		if (!columnId) {
+			continue;
+		}
+		if (summary.state === "awaiting_review" && columnId === PLAN_COLUMN_ID) {
+			next[PLAN_COLUMN_ID] = Math.max(0, (next[PLAN_COLUMN_ID] ?? 0) - 1);
+			next[PLAN_REVIEW_COLUMN_ID] = (next[PLAN_REVIEW_COLUMN_ID] ?? 0) + 1;
 			continue;
 		}
 		if (summary.state === "awaiting_review" && columnId === "in_progress") {

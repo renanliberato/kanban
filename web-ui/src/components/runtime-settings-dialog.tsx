@@ -6,6 +6,7 @@ import * as RadixPopover from "@radix-ui/react-popover";
 import * as RadixSelect from "@radix-ui/react-select";
 import * as RadixSwitch from "@radix-ui/react-switch";
 import { getRuntimeAgentCatalogEntry, getRuntimeLaunchSupportedAgentCatalog } from "@runtime-agent-catalog";
+import { getBoardColumnDefinition } from "@runtime-board-columns";
 import { areRuntimeProjectShortcutsEqual } from "@runtime-shortcuts";
 import {
 	Bell,
@@ -982,6 +983,8 @@ export function RuntimeSettingsDialog({
 									const stageFailurePromptTemplate =
 										stageFailurePromptTemplates[promptConfig.columnId] ?? promptConfig.failurePromptTemplate;
 									const usesSignalCompletion = (promptConfig.completionMode ?? "signal") === "signal";
+									const passTargetTitle =
+										getBoardColumnDefinition(promptConfig.passTargetColumnId)?.title ?? "the next column";
 									return (
 										<div key={promptConfig.columnId} className="mt-3">
 											<div className="flex items-center justify-between gap-2 mb-1">
@@ -1061,7 +1064,7 @@ export function RuntimeSettingsDialog({
 												</>
 											) : (
 												<p className="text-text-secondary text-[12px] mt-1 mb-0">
-													Moves to Review when the prompt finishes.
+													Moves to {passTargetTitle} when the prompt finishes.
 												</p>
 											)}
 										</div>

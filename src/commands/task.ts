@@ -11,7 +11,14 @@ import type {
 	RuntimeWorkspaceStateResponse,
 } from "../core/api-contract";
 import { runtimeAgentIdSchema, runtimeClineReasoningEffortSchema } from "../core/api-contract";
-import { getBoardColumnDefinitions, isTaskWorkspaceColumnId, normalizeBoardColumnId } from "../core/board-columns";
+import {
+	getBoardColumnDefinitions,
+	getFirstWorkflowColumnId,
+	isTaskWorkspaceColumnId,
+	normalizeBoardColumnId,
+	PLAN_COLUMN_ID,
+	TASK_PROMPT_TEMPLATE_TOKEN,
+} from "../core/board-columns";
 import { buildKanbanRuntimeUrl, getKanbanRuntimeOrigin, getRuntimeFetch } from "../core/runtime-endpoint";
 import {
 	addTaskDependency,
@@ -59,6 +66,21 @@ function toErrorMessage(error: unknown): string {
 
 function printJson(payload: unknown): void {
 	process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+}
+
+function renderTaskPromptTemplate(
+	template: string,
+	taskPrompt: string,
+	options?: { appendIfMissing?: boolean },
+): string {
+	const normalizedTaskPrompt = taskPrompt.trim();
+	if (template.includes(TASK_PROMPT_TEMPLATE_TOKEN)) {
+		return template.replaceAll(TASK_PROMPT_TEMPLATE_TOKEN, normalizedTaskPrompt);
+	}
+	if (!options?.appendIfMissing || normalizedTaskPrompt.length === 0) {
+		return template;
+	}
+	return `${template.trimEnd()}\n\nTask prompt:\n${normalizedTaskPrompt}`;
 }
 
 function parseListColumn(value: string | undefined): ListTaskColumn | undefined {
@@ -694,6 +716,10 @@ async function startTask(input: { cwd: string; taskId: string; projectPath?: str
 
 	const existingSession = runtimeState.sessions[task.id] ?? null;
 	const shouldStartSession = !existingSession || existingSession.state !== "running";
+	const targetColumnId =
+		fromColumnId === "backlog"
+			? (normalizeBoardColumnId(getFirstWorkflowColumnId()) ?? PLAN_COLUMN_ID)
+			: "in_progress";
 
 	if (shouldStartSession) {
 		const ensured = await runtimeClient.workspace.ensureWorktree.mutate({
@@ -704,9 +730,17 @@ async function startTask(input: { cwd: string; taskId: string; projectPath?: str
 			throw new Error(ensured.error ?? "Could not ensure task worktree.");
 		}
 
+		const runtimeConfig = await runtimeClient.runtime.getConfig.query();
+		const planPromptTemplate = runtimeConfig.stageAutomationPrompts.find(
+			(prompt) => prompt.columnId === PLAN_COLUMN_ID,
+		)?.promptTemplate;
+		const kickoffPrompt =
+			targetColumnId === PLAN_COLUMN_ID && planPromptTemplate
+				? renderTaskPromptTemplate(planPromptTemplate, task.prompt, { appendIfMissing: true })
+				: task.prompt;
 		const started = await runtimeClient.runtime.startTaskSession.mutate({
 			taskId: task.id,
-			prompt: task.prompt,
+			prompt: kickoffPrompt,
 			taskTitle: task.title,
 			startInPlanMode: task.startInPlanMode,
 			baseRef: task.baseRef,
@@ -719,7 +753,7 @@ async function startTask(input: { cwd: string; taskId: string; projectPath?: str
 	}
 
 	const moved = await updateRuntimeWorkspaceState(runtimeClient, workspaceRepoPath, (latestState) => {
-		const movement = moveTaskToColumn(latestState.board, input.taskId, "in_progress");
+		const movement = moveTaskToColumn(latestState.board, input.taskId, targetColumnId);
 		if (!movement.task) {
 			throw new Error(`Task "${input.taskId}" could not be resolved.`);
 		}
@@ -742,7 +776,7 @@ async function startTask(input: { cwd: string; taskId: string; projectPath?: str
 			task: {
 				id: task.id,
 				prompt: task.prompt,
-				column: "in_progress",
+				column: targetColumnId,
 				workspacePath: workspaceRepoPath,
 			},
 		};
@@ -753,7 +787,7 @@ async function startTask(input: { cwd: string; taskId: string; projectPath?: str
 		task: {
 			id: task.id,
 			prompt: task.prompt,
-			column: "in_progress",
+			column: targetColumnId,
 			workspacePath: workspaceRepoPath,
 		},
 	};
@@ -1318,7 +1352,7 @@ export function registerTaskCommand(program: Command): void {
 
 	task
 		.command("start")
-		.description("Start a task session and move task to in_progress.")
+		.description("Start a task session and move the task into the board workflow.")
 		.requiredOption("--task-id <id>", "Task ID.")
 		.option("--project-path <path>", "Workspace path. Defaults to current directory workspace.")
 		.action(async (options: { taskId: string; projectPath?: string }) => {

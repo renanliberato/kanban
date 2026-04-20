@@ -1,9 +1,11 @@
 export const BACKLOG_COLUMN_ID = "backlog";
+export const PLAN_COLUMN_ID = "plan";
+export const PLAN_REVIEW_COLUMN_ID = "plan_review";
 export const IN_PROGRESS_COLUMN_ID = "in_progress";
 export const REVIEW_COLUMN_ID = "review";
 export const TRASH_COLUMN_ID = "trash";
 
-export type BoardColumnKind = "backlog" | "in_progress" | "automation_stage" | "review" | "trash";
+export type BoardColumnKind = "backlog" | "in_progress" | "automation_stage" | "plan_review" | "review" | "trash";
 export type BoardColumnTone = "default" | "accent" | "blue" | "green" | "orange" | "purple" | "red" | "gold";
 
 export interface BoardColumnAutomationDefinition {
@@ -27,7 +29,7 @@ export interface BoardColumnDefinition {
 	automation?: BoardColumnAutomationDefinition;
 }
 
-const BOARD_BASE_COLUMN_DEFINITIONS: readonly BoardColumnDefinition[] = [
+const BOARD_BACKLOG_COLUMN_DEFINITIONS: readonly BoardColumnDefinition[] = [
 	{
 		id: BACKLOG_COLUMN_ID,
 		title: "Backlog",
@@ -35,6 +37,19 @@ const BOARD_BASE_COLUMN_DEFINITIONS: readonly BoardColumnDefinition[] = [
 		kind: "backlog",
 		tone: "default",
 	},
+] as const;
+
+const BOARD_PLAN_REVIEW_COLUMN_DEFINITIONS: readonly BoardColumnDefinition[] = [
+	{
+		id: PLAN_REVIEW_COLUMN_ID,
+		title: "Plan Review",
+		shortLabel: "PR",
+		kind: "plan_review",
+		tone: "gold",
+	},
+] as const;
+
+const BOARD_IN_PROGRESS_COLUMN_DEFINITIONS: readonly BoardColumnDefinition[] = [
 	{
 		id: IN_PROGRESS_COLUMN_ID,
 		title: "In Progress",
@@ -44,12 +59,36 @@ const BOARD_BASE_COLUMN_DEFINITIONS: readonly BoardColumnDefinition[] = [
 	},
 ] as const;
 
+export const TASK_PROMPT_TEMPLATE_TOKEN = "{{task_prompt}}";
+export const PLAN_STAGE_PASSED_SIGNAL = "PLAN COMPLETE";
+export const PLAN_STAGE_FAILED_SIGNAL = "PLAN FAILED";
 export const TEST_STAGE_FAILED_SIGNAL = "TEST FAILED";
 export const TEST_STAGE_PASSED_SIGNAL = "TEST PASSED";
 export const CODE_REVIEW_STAGE_FAILED_SIGNAL = "CODE REVIEW FAILED";
 export const CODE_REVIEW_STAGE_PASSED_SIGNAL = "CODE REVIEW PASSED";
 export const DOCS_OPTIMIZATION_STAGE_FAILED_SIGNAL = "DOCS OPTIMIZATION FAILED";
 export const DOCS_OPTIMIZATION_STAGE_PASSED_SIGNAL = "DOCS OPTIMIZATION COMPLETE";
+
+const DEFAULT_PLAN_STAGE_PROMPT_TEMPLATE = `Create an implementation plan for this task.
+
+Task:
+${TASK_PROMPT_TEMPLATE_TOKEN}
+
+Rules:
+- Inspect the relevant code before deciding on an approach.
+- Do not modify product code yet.
+- Identify the files, contracts, tests, and risks that should guide implementation.
+- Keep the plan concrete enough for the implementation turn to execute.
+
+Return:
+- Proposed approach
+- Files or areas likely to change
+- Tests to add or update
+- Risks or open questions`;
+
+const DEFAULT_PLAN_STAGE_FAILURE_PROMPT_TEMPLATE = `Planning did not complete cleanly.
+
+Summarize what prevented planning from completing, then hand off for plan review.`;
 
 const DEFAULT_TEST_STAGE_PROMPT_TEMPLATE = `Run the project's tests relevant to the task and evaluate the result.
 
@@ -126,7 +165,23 @@ const DEFAULT_DOCS_OPTIMIZATION_STAGE_FAILURE_PROMPT_TEMPLATE = `The documentati
 
 Summarize what prevented the pass from completing, then hand off for review without changing product code.`;
 
-export const BOARD_STAGE_COLUMN_DEFINITIONS: readonly BoardColumnDefinition[] = [
+const BOARD_PLAN_STAGE_COLUMN_DEFINITION: BoardColumnDefinition = {
+	id: PLAN_COLUMN_ID,
+	title: "Plan",
+	shortLabel: "PL",
+	kind: "automation_stage",
+	tone: "blue",
+	automation: {
+		promptTemplateDefault: DEFAULT_PLAN_STAGE_PROMPT_TEMPLATE,
+		failurePromptTemplateDefault: DEFAULT_PLAN_STAGE_FAILURE_PROMPT_TEMPLATE,
+		passSignal: PLAN_STAGE_PASSED_SIGNAL,
+		failSignal: PLAN_STAGE_FAILED_SIGNAL,
+		completionMode: "always_pass",
+		passTargetColumnId: PLAN_REVIEW_COLUMN_ID,
+	},
+};
+
+const BOARD_POST_IMPLEMENTATION_STAGE_COLUMN_DEFINITIONS: readonly BoardColumnDefinition[] = [
 	{
 		id: "test",
 		title: "Test",
@@ -175,6 +230,11 @@ export const BOARD_STAGE_COLUMN_DEFINITIONS: readonly BoardColumnDefinition[] = 
 	},
 ] as const;
 
+export const BOARD_STAGE_COLUMN_DEFINITIONS: readonly BoardColumnDefinition[] = [
+	BOARD_PLAN_STAGE_COLUMN_DEFINITION,
+	...BOARD_POST_IMPLEMENTATION_STAGE_COLUMN_DEFINITIONS,
+] as const;
+
 const BOARD_FINAL_COLUMN_DEFINITIONS: readonly BoardColumnDefinition[] = [
 	{
 		id: REVIEW_COLUMN_ID,
@@ -193,8 +253,11 @@ const BOARD_FINAL_COLUMN_DEFINITIONS: readonly BoardColumnDefinition[] = [
 ] as const;
 
 export const BOARD_COLUMN_DEFINITIONS: readonly BoardColumnDefinition[] = [
-	...BOARD_BASE_COLUMN_DEFINITIONS,
-	...BOARD_STAGE_COLUMN_DEFINITIONS,
+	...BOARD_BACKLOG_COLUMN_DEFINITIONS,
+	BOARD_PLAN_STAGE_COLUMN_DEFINITION,
+	...BOARD_PLAN_REVIEW_COLUMN_DEFINITIONS,
+	...BOARD_IN_PROGRESS_COLUMN_DEFINITIONS,
+	...BOARD_POST_IMPLEMENTATION_STAGE_COLUMN_DEFINITIONS,
 	...BOARD_FINAL_COLUMN_DEFINITIONS,
 ] as const;
 
@@ -240,6 +303,14 @@ export function isInProgressColumnId(columnId: string | null | undefined): boole
 	return columnId === IN_PROGRESS_COLUMN_ID;
 }
 
+export function isPlanColumnId(columnId: string | null | undefined): boolean {
+	return columnId === PLAN_COLUMN_ID;
+}
+
+export function isPlanReviewColumnId(columnId: string | null | undefined): boolean {
+	return columnId === PLAN_REVIEW_COLUMN_ID;
+}
+
 export function isReviewColumnId(columnId: string | null | undefined): boolean {
 	return columnId === REVIEW_COLUMN_ID;
 }
@@ -273,6 +344,10 @@ export function getWorkflowColumnIds(): readonly string[] {
 	return BOARD_COLUMN_DEFINITIONS.filter((column) => column.kind !== "backlog" && column.kind !== "trash").map(
 		(column) => column.id,
 	);
+}
+
+export function getFirstWorkflowColumnId(): string {
+	return getWorkflowColumnIds()[0] ?? REVIEW_COLUMN_ID;
 }
 
 export function getFirstPostInProgressColumnId(): string {

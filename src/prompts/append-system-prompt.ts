@@ -291,7 +291,7 @@ Parameters:
 
 ## task start
 
-Purpose: start a task by ensuring its worktree, launching its agent session, and moving it to \`in_progress\`.
+Purpose: start a task by ensuring its worktree, launching its agent session, and moving it into the board workflow.
 
 Command:
 \`${kanbanCommand} task start --task-id <task_id> [--project-path <path>]\`

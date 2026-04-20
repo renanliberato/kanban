@@ -54,6 +54,8 @@ describe("board dependency state", () => {
 	it("creates the configured board workflow columns in order", () => {
 		expect(createInitialBoardData().columns.map((column) => column.id)).toEqual([
 			"backlog",
+			"plan",
+			"plan_review",
 			"in_progress",
 			"test",
 			"code_review",
@@ -249,22 +251,22 @@ describe("board dependency state", () => {
 		expect(getTaskColumnId(attemptedReviewMove.board, taskA)).toBe("in_progress");
 	});
 
-	it("preserves manual backlog to in-progress drop positions", () => {
+	it("preserves manual backlog to plan drop positions", () => {
 		const fixture = createBacklogBoard(["Task A", "Task B", "Task C"]);
 		const taskA = requireTaskId(fixture.taskIdByPrompt["Task A"], "Task A");
 		const taskB = requireTaskId(fixture.taskIdByPrompt["Task B"], "Task B");
 		const taskC = requireTaskId(fixture.taskIdByPrompt["Task C"], "Task C");
 
-		const movedB = moveTaskToColumn(fixture.board, taskB, "in_progress");
+		const movedB = moveTaskToColumn(fixture.board, taskB, "plan");
 		expect(movedB.moved).toBe(true);
-		const movedC = moveTaskToColumn(movedB.board, taskC, "in_progress");
+		const movedC = moveTaskToColumn(movedB.board, taskC, "plan");
 		expect(movedC.moved).toBe(true);
 
 		const movedA = applyDragResult(movedC.board, {
 			draggableId: taskA,
 			type: "CARD",
 			source: { droppableId: "backlog", index: 0 },
-			destination: { droppableId: "in_progress", index: 2 },
+			destination: { droppableId: "plan", index: 2 },
 			mode: "SNAP",
 			reason: "DROP",
 			combine: null,
@@ -272,21 +274,21 @@ describe("board dependency state", () => {
 		expect(movedA.moveEvent).toMatchObject({
 			taskId: taskA,
 			fromColumnId: "backlog",
-			toColumnId: "in_progress",
+			toColumnId: "plan",
 		});
-		const inProgressColumn = movedA.board.columns.find((column) => column.id === "in_progress");
-		expect(inProgressColumn?.cards.map((card) => card.id)).toEqual([taskB, taskC, taskA]);
+		const planColumn = movedA.board.columns.find((column) => column.id === "plan");
+		expect(planColumn?.cards.map((card) => card.id)).toEqual([taskB, taskC, taskA]);
 	});
 
-	it("inserts programmatic backlog to in-progress moves at the top", () => {
+	it("inserts programmatic backlog to plan moves at the top", () => {
 		const fixture = createBacklogBoard(["Task A", "Task B", "Task C"]);
 		const taskA = requireTaskId(fixture.taskIdByPrompt["Task A"], "Task A");
 		const taskB = requireTaskId(fixture.taskIdByPrompt["Task B"], "Task B");
 		const taskC = requireTaskId(fixture.taskIdByPrompt["Task C"], "Task C");
 
-		const movedB = moveTaskToColumn(fixture.board, taskB, "in_progress");
+		const movedB = moveTaskToColumn(fixture.board, taskB, "plan");
 		expect(movedB.moved).toBe(true);
-		const movedC = moveTaskToColumn(movedB.board, taskC, "in_progress");
+		const movedC = moveTaskToColumn(movedB.board, taskC, "plan");
 		expect(movedC.moved).toBe(true);
 
 		const movedA = applyDragResult(
@@ -295,7 +297,7 @@ describe("board dependency state", () => {
 				draggableId: taskA,
 				type: "CARD",
 				source: { droppableId: "backlog", index: 0 },
-				destination: { droppableId: "in_progress", index: 2 },
+				destination: { droppableId: "plan", index: 2 },
 				mode: "SNAP",
 				reason: "DROP",
 				combine: null,
@@ -304,7 +306,7 @@ describe("board dependency state", () => {
 				programmaticCardMoveInFlight: {
 					taskId: taskA,
 					fromColumnId: "backlog",
-					toColumnId: "in_progress",
+					toColumnId: "plan",
 					insertAtTop: true,
 				},
 			},
@@ -312,10 +314,10 @@ describe("board dependency state", () => {
 		expect(movedA.moveEvent).toMatchObject({
 			taskId: taskA,
 			fromColumnId: "backlog",
-			toColumnId: "in_progress",
+			toColumnId: "plan",
 		});
-		const inProgressColumn = movedA.board.columns.find((column) => column.id === "in_progress");
-		expect(inProgressColumn?.cards.map((card) => card.id)).toEqual([taskA, taskB, taskC]);
+		const planColumn = movedA.board.columns.find((column) => column.id === "plan");
+		expect(planColumn?.cards.map((card) => card.id)).toEqual([taskA, taskB, taskC]);
 	});
 
 	it("supports programmatic drag transitions between in-progress and review", () => {

@@ -12,6 +12,7 @@ import type {
 	RuntimeTerminalWsClientMessage,
 	RuntimeTerminalWsServerMessage,
 } from "@/runtime/types";
+import { notifyTerminalSubmittedLine } from "@/terminal/terminal-controller-registry";
 import { clearTerminalGeometry, reportTerminalGeometry } from "@/terminal/terminal-geometry-registry";
 import { createKanbanTerminalOptions } from "@/terminal/terminal-options";
 import {
@@ -161,6 +162,8 @@ class PersistentTerminal {
 	private restoreCompleted = false;
 	private outputTextDecoder = new TextDecoder();
 	private terminalWriteQueue: Promise<void> = Promise.resolve();
+	private reconstructedInputLine = "";
+	private canReconstructInputLine = true;
 	private disposed = false;
 
 	constructor(
@@ -195,6 +198,7 @@ class PersistentTerminal {
 		this.terminal.unicode.activeVersion = "11";
 		this.terminal.open(this.hostElement);
 		this.terminal.onData((data) => {
+			this.recordUserInput(data);
 			this.sendIoData(data);
 		});
 		this.terminal.onBinary((data) => {
@@ -485,6 +489,41 @@ class PersistentTerminal {
 		}
 		if (!this.controlSocket) {
 			this.connectControl();
+		}
+	}
+
+	private recordUserInput(data: string): void {
+		for (const char of data) {
+			if (char === "\r" || char === "\n") {
+				if (this.canReconstructInputLine) {
+					notifyTerminalSubmittedLine(this.taskId, this.reconstructedInputLine);
+				}
+				this.reconstructedInputLine = "";
+				this.canReconstructInputLine = true;
+				continue;
+			}
+			if (char === "\u007f" || char === "\b") {
+				if (this.reconstructedInputLine.length > 0) {
+					this.reconstructedInputLine = this.reconstructedInputLine.slice(0, -1);
+				}
+				continue;
+			}
+			if (char === "\u0003" || char === "\u0015") {
+				this.reconstructedInputLine = "";
+				this.canReconstructInputLine = true;
+				continue;
+			}
+			if (char === "\u001b") {
+				this.canReconstructInputLine = false;
+				continue;
+			}
+			if (char < " " && char !== "\t") {
+				this.canReconstructInputLine = false;
+				continue;
+			}
+			if (this.canReconstructInputLine) {
+				this.reconstructedInputLine += char;
+			}
 		}
 	}
 

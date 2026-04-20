@@ -46,6 +46,7 @@ interface StartTaskSessionResult {
 
 interface StartTaskSessionOptions {
 	resumeFromTrash?: boolean;
+	promptOverride?: string;
 }
 
 export interface UseTaskSessionsResult {
@@ -150,7 +151,7 @@ export function useTaskSessions({ currentProjectId, setSessions }: UseTaskSessio
 				return { ok: false, message: "No project selected." };
 			}
 			try {
-				const kickoffPrompt = options?.resumeFromTrash ? "" : task.prompt.trim();
+				const kickoffPrompt = options?.resumeFromTrash ? "" : (options?.promptOverride ?? task.prompt).trim();
 				const trpcClient = getRuntimeTrpcClient(currentProjectId);
 				const geometry =
 					getTerminalGeometry(task.id) ?? estimateTaskSessionGeometry(window.innerWidth, window.innerHeight);

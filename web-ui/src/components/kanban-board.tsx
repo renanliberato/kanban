@@ -8,7 +8,7 @@ import {
 	type SensorAPI,
 	type SnapDragActions,
 } from "@hello-pangea/dnd";
-import { getBoardColumnOrderIndex } from "@runtime-board-columns";
+import { getBoardColumnOrderIndex, PLAN_COLUMN_ID } from "@runtime-board-columns";
 import type { ReactNode, WheelEvent as ReactWheelEvent } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -377,7 +377,7 @@ export function KanbanBoard({
 	// so the edge transition can animate alongside the move.
 	const activeTaskEffectiveColumnId =
 		programmaticCardMoveInFlight?.toColumnId ??
-		(activeDragTaskId !== null && activeDragSourceColumnId === "backlog" ? "in_progress" : null);
+		(activeDragTaskId !== null && activeDragSourceColumnId === "backlog" ? PLAN_COLUMN_ID : null);
 
 	return (
 		<DragDropContext

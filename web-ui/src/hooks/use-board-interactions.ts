@@ -2,10 +2,14 @@ import type { DropResult } from "@hello-pangea/dnd";
 import {
 	getAutomatedBoardStageColumnDefinitions,
 	getFirstPostInProgressColumnId,
+	getFirstWorkflowColumnId,
 	getNextWorkflowColumnId,
 	IN_PROGRESS_COLUMN_ID,
 	normalizeBoardColumnId,
+	PLAN_COLUMN_ID,
+	PLAN_REVIEW_COLUMN_ID,
 	REVIEW_COLUMN_ID,
+	TASK_PROMPT_TEMPLATE_TOKEN,
 	TRASH_COLUMN_ID,
 } from "@runtime-board-columns";
 import type { Dispatch, SetStateAction } from "react";
@@ -31,6 +35,7 @@ import {
 	updateTask,
 } from "@/state/board-state";
 import { clearTaskWorkspaceInfo, setTaskWorkspaceInfo } from "@/stores/workspace-metadata-store";
+import { addTerminalSubmittedLineListener } from "@/terminal/terminal-controller-registry";
 import type { SendTerminalInputOptions } from "@/terminal/terminal-input";
 import type { BoardCard, BoardColumnId, BoardData } from "@/types";
 import { resolveTaskAutoReviewMode } from "@/types";
@@ -64,15 +69,18 @@ interface ActiveStageFailure {
 }
 
 type StageAutomationPromptReason = "entry" | "failure";
+export type PlanReviewPromptRoute = "not_applicable" | typeof PLAN_COLUMN_ID | typeof IN_PROGRESS_COLUMN_ID;
 
 interface QueuedStageAutomationPrompt {
 	taskId: string;
 	stage: RuntimeStageAutomationPromptConfig;
 	updatedAt: number;
 	reason: StageAutomationPromptReason;
+	taskPrompt: string;
 }
 
 const STAGE_AUTOMATION_LOG_PREFIX = "[kanban][stage-automation]";
+const REVIEW_PLAN_PROMPT_PREFIX = "REVIEW PLAN";
 
 function getStageAutomationPromptKey(taskId: string, columnId: string): string {
 	return `${taskId}:${columnId}`;
@@ -130,6 +138,39 @@ function createDefaultStageAutomationPrompts(): RuntimeStageAutomationPromptConf
 
 const DEFAULT_STAGE_AUTOMATION_PROMPTS = createDefaultStageAutomationPrompts();
 
+function isReviewPlanPrompt(text: string): boolean {
+	return text.trim().toUpperCase().startsWith(REVIEW_PLAN_PROMPT_PREFIX);
+}
+
+function renderTaskPromptTemplate(
+	template: string,
+	taskPrompt: string,
+	options?: { appendIfMissing?: boolean },
+): string {
+	const normalizedTaskPrompt = taskPrompt.trim();
+	if (template.includes(TASK_PROMPT_TEMPLATE_TOKEN)) {
+		return template.replaceAll(TASK_PROMPT_TEMPLATE_TOKEN, normalizedTaskPrompt);
+	}
+	if (!options?.appendIfMissing || normalizedTaskPrompt.length === 0) {
+		return template;
+	}
+	return `${template.trimEnd()}\n\nTask prompt:\n${normalizedTaskPrompt}`;
+}
+
+function renderStagePromptForTask(input: {
+	stage: RuntimeStageAutomationPromptConfig;
+	reason: StageAutomationPromptReason;
+	taskPrompt: string;
+}): string {
+	const template = input.reason === "entry" ? input.stage.promptTemplate : input.stage.failurePromptTemplate;
+	if (input.reason !== "entry") {
+		return template;
+	}
+	return renderTaskPromptTemplate(template, input.taskPrompt, {
+		appendIfMissing: input.stage.columnId === PLAN_COLUMN_ID,
+	});
+}
+
 function logStageAutomation(taskId: string, message: string, details?: Record<string, unknown>): void {
 	if (details) {
 		console.info(`${STAGE_AUTOMATION_LOG_PREFIX} [${taskId}] ${message}`, details);
@@ -183,6 +224,7 @@ export interface UseBoardInteractionsResult {
 	handleConfirmClearTrash: () => void;
 	handleAddReviewComments: (taskId: string, text: string) => Promise<void>;
 	handleSendReviewComments: (taskId: string, text: string) => Promise<void>;
+	handlePlanReviewPromptSubmission: (taskId: string, text: string) => PlanReviewPromptRoute;
 	moveToTrashLoadingById: Record<string, boolean>;
 	trashTaskCount: number;
 }
@@ -209,6 +251,8 @@ export function useBoardInteractions({
 	taskGitActionLoadingByTaskId,
 	runAutoReviewGitAction,
 }: UseBoardInteractionsInput): UseBoardInteractionsResult {
+	const boardRef = useRef(board);
+	const sessionsRef = useRef(sessions);
 	const previousSessionsRef = useRef<Record<string, RuntimeTaskSessionSummary>>({});
 	const previousProjectIdRef = useRef<string | null>(currentProjectId);
 	const notificationPermissionPromptInFlightRef = useRef(false);
@@ -224,6 +268,15 @@ export function useBoardInteractions({
 	const activeEntryStageStartedByTaskIdRef = useRef<Record<string, true>>({});
 	const activeStageFailureByTaskIdRef = useRef<Record<string, ActiveStageFailure>>({});
 	const [moveToTrashLoadingById, setMoveToTrashLoadingById] = useState<Record<string, boolean>>({});
+
+	useEffect(() => {
+		boardRef.current = board;
+	}, [board]);
+
+	useEffect(() => {
+		sessionsRef.current = sessions;
+	}, [sessions]);
+
 	const {
 		handleProgrammaticCardMoveReady,
 		setRequestMoveTaskToTrashHandler,
@@ -254,10 +307,10 @@ export function useBoardInteractions({
 		}
 		return automationByColumnId;
 	}, [stageAutomationPrompts]);
-	const firstStageAutomationColumnId = useMemo(() => {
+	const firstPostInProgressStageAutomationColumnId = useMemo(() => {
 		for (const promptConfig of stageAutomationPrompts) {
 			const columnId = normalizeStageAutomationColumnId(promptConfig.columnId);
-			if (columnId) {
+			if (columnId && columnId !== PLAN_COLUMN_ID) {
 				return columnId;
 			}
 		}
@@ -349,6 +402,86 @@ export function useBoardInteractions({
 		});
 	}, []);
 
+	const trashTaskIds = useMemo(() => {
+		const trashColumn = board.columns.find((column) => column.id === "trash");
+		return trashColumn ? trashColumn.cards.map((card) => card.id) : [];
+	}, [board.columns]);
+	const trashTaskCount = trashTaskIds.length;
+
+	const maybeRequestNotificationPermissionForTaskStart = useCallback(() => {
+		const shouldPromptForNotificationPermission =
+			readyForReviewNotificationsEnabled &&
+			getBrowserNotificationPermission() === "default" &&
+			!hasPromptedForBrowserNotificationPermission() &&
+			!notificationPermissionPromptInFlightRef.current;
+		if (!shouldPromptForNotificationPermission) {
+			return;
+		}
+		notificationPermissionPromptInFlightRef.current = true;
+		void requestBrowserNotificationPermission().finally(() => {
+			notificationPermissionPromptInFlightRef.current = false;
+		});
+	}, [readyForReviewNotificationsEnabled]);
+
+	const markStageEntryPromptAlreadySent = useCallback((taskId: string, columnId: BoardColumnId, updatedAt: number) => {
+		const key = getStageAutomationPromptKey(taskId, columnId);
+		enteredStageSessionVersionByKeyRef.current[key] = updatedAt;
+		processedStagePromptSessionVersionByKeyRef.current[key] = updatedAt;
+		if (activeEntryStageColumnByTaskIdRef.current[taskId] === columnId) {
+			delete activeEntryStageColumnByTaskIdRef.current[taskId];
+			delete activeEntryStageStartedByTaskIdRef.current[taskId];
+		}
+	}, []);
+
+	const getBacklogStartColumnId = useCallback((): BoardColumnId => {
+		return normalizeBoardColumnId(getFirstWorkflowColumnId()) ?? PLAN_COLUMN_ID;
+	}, []);
+
+	const getBacklogStartPrompt = useCallback(
+		(task: BoardCard, targetColumnId: BoardColumnId): string => {
+			if (targetColumnId !== PLAN_COLUMN_ID) {
+				return task.prompt.trim();
+			}
+			const planStage = stageAutomationByColumnId.get(PLAN_COLUMN_ID);
+			if (!planStage) {
+				return task.prompt.trim();
+			}
+			return renderStagePromptForTask({
+				stage: planStage,
+				reason: "entry",
+				taskPrompt: task.prompt,
+			}).trim();
+		},
+		[stageAutomationByColumnId],
+	);
+
+	const movePlanReviewTaskForPrompt = useCallback(
+		(taskId: string, text: string): PlanReviewPromptRoute => {
+			if (text.trim().length === 0) {
+				return "not_applicable";
+			}
+			const selection = findCardSelection(boardRef.current, taskId);
+			if (!selection || selection.column.id !== PLAN_REVIEW_COLUMN_ID) {
+				return "not_applicable";
+			}
+
+			const targetColumnId = isReviewPlanPrompt(text) ? PLAN_COLUMN_ID : IN_PROGRESS_COLUMN_ID;
+			if (targetColumnId === PLAN_COLUMN_ID) {
+				markStageEntryPromptAlreadySent(taskId, PLAN_COLUMN_ID, sessionsRef.current[taskId]?.updatedAt ?? 0);
+			}
+			setBoard((currentBoard) => {
+				const currentColumnId = getTaskColumnId(currentBoard, taskId);
+				if (currentColumnId !== PLAN_REVIEW_COLUMN_ID) {
+					return currentBoard;
+				}
+				const moved = moveTaskToColumn(currentBoard, taskId, targetColumnId, { insertAtTop: true });
+				return moved.moved ? moved.board : currentBoard;
+			});
+			return targetColumnId;
+		},
+		[markStageEntryPromptAlreadySent, setBoard],
+	);
+
 	const handleAddReviewComments = useCallback(
 		async (taskId: string, text: string) => {
 			const typed = await sendTaskSessionInput(taskId, text, { appendNewline: false, mode: "paste" });
@@ -366,6 +499,7 @@ export function useBoardInteractions({
 
 	const handleSendReviewComments = useCallback(
 		async (taskId: string, text: string) => {
+			movePlanReviewTaskForPrompt(taskId, text);
 			const typed = await sendTaskSessionInput(taskId, text, { appendNewline: false, mode: "paste" });
 			if (!typed.ok) {
 				showAppToast({
@@ -389,29 +523,25 @@ export function useBoardInteractions({
 				});
 			}
 		},
-		[sendTaskSessionInput],
+		[movePlanReviewTaskForPrompt, sendTaskSessionInput],
 	);
 
-	const trashTaskIds = useMemo(() => {
-		const trashColumn = board.columns.find((column) => column.id === "trash");
-		return trashColumn ? trashColumn.cards.map((card) => card.id) : [];
+	const planReviewTaskIds = useMemo(() => {
+		return board.columns.find((column) => column.id === PLAN_REVIEW_COLUMN_ID)?.cards.map((card) => card.id) ?? [];
 	}, [board.columns]);
-	const trashTaskCount = trashTaskIds.length;
 
-	const maybeRequestNotificationPermissionForTaskStart = useCallback(() => {
-		const shouldPromptForNotificationPermission =
-			readyForReviewNotificationsEnabled &&
-			getBrowserNotificationPermission() === "default" &&
-			!hasPromptedForBrowserNotificationPermission() &&
-			!notificationPermissionPromptInFlightRef.current;
-		if (!shouldPromptForNotificationPermission) {
-			return;
-		}
-		notificationPermissionPromptInFlightRef.current = true;
-		void requestBrowserNotificationPermission().finally(() => {
-			notificationPermissionPromptInFlightRef.current = false;
-		});
-	}, [readyForReviewNotificationsEnabled]);
+	useEffect(() => {
+		const cleanups = planReviewTaskIds.map((taskId) =>
+			addTerminalSubmittedLineListener(taskId, (line) => {
+				movePlanReviewTaskForPrompt(taskId, line);
+			}),
+		);
+		return () => {
+			for (const cleanup of cleanups) {
+				cleanup();
+			}
+		};
+	}, [movePlanReviewTaskForPrompt, planReviewTaskIds]);
 
 	const kickoffTaskInProgress = useCallback(
 		async (
@@ -421,13 +551,14 @@ export function useBoardInteractions({
 			options?: { optimisticMove?: boolean },
 		): Promise<boolean> => {
 			const optimisticMove = options?.optimisticMove ?? true;
+			const targetColumnId = getBacklogStartColumnId();
 			const ensured = await ensureTaskWorkspace(task);
 			if (!ensured.ok) {
 				notifyError(ensured.message ?? "Could not set up task workspace.");
 				if (optimisticMove) {
 					setBoard((currentBoard) => {
 						const currentColumnId = getTaskColumnId(currentBoard, taskId);
-						if (currentColumnId !== "in_progress") {
+						if (currentColumnId !== targetColumnId) {
 							return currentBoard;
 						}
 						const reverted = moveTaskToColumn(currentBoard, taskId, fromColumnId);
@@ -461,13 +592,17 @@ export function useBoardInteractions({
 					setTaskWorkspaceInfo(infoAfterEnsure);
 				}
 			}
-			const started = await startTaskSession(task);
+			const initialPrompt = getBacklogStartPrompt(task, targetColumnId);
+			if (targetColumnId === PLAN_COLUMN_ID) {
+				markStageEntryPromptAlreadySent(taskId, PLAN_COLUMN_ID, sessionsRef.current[taskId]?.updatedAt ?? 0);
+			}
+			const started = await startTaskSession(task, { promptOverride: initialPrompt });
 			if (!started.ok) {
 				notifyError(started.message ?? "Could not start task session.");
 				if (optimisticMove) {
 					setBoard((currentBoard) => {
 						const currentColumnId = getTaskColumnId(currentBoard, taskId);
-						if (currentColumnId !== "in_progress") {
+						if (currentColumnId !== targetColumnId) {
 							return currentBoard;
 						}
 						const reverted = moveTaskToColumn(currentBoard, taskId, fromColumnId);
@@ -482,13 +617,22 @@ export function useBoardInteractions({
 					if (currentColumnId !== fromColumnId) {
 						return currentBoard;
 					}
-					const moved = moveTaskToColumn(currentBoard, taskId, "in_progress", { insertAtTop: true });
+					const moved = moveTaskToColumn(currentBoard, taskId, targetColumnId, { insertAtTop: true });
 					return moved.moved ? moved.board : currentBoard;
 				});
 			}
 			return true;
 		},
-		[ensureTaskWorkspace, fetchTaskWorkspaceInfo, selectedTaskId, setBoard, startTaskSession],
+		[
+			ensureTaskWorkspace,
+			fetchTaskWorkspaceInfo,
+			getBacklogStartColumnId,
+			getBacklogStartPrompt,
+			markStageEntryPromptAlreadySent,
+			selectedTaskId,
+			setBoard,
+			startTaskSession,
+		],
 	);
 
 	const startBacklogTaskImmediately = useCallback(
@@ -503,7 +647,7 @@ export function useBoardInteractions({
 				if (!currentSelection || currentSelection.column.id !== "backlog") {
 					return currentBoard;
 				}
-				const moved = moveTaskToColumn(currentBoard, task.id, "in_progress", { insertAtTop: true });
+				const moved = moveTaskToColumn(currentBoard, task.id, getBacklogStartColumnId(), { insertAtTop: true });
 				return moved.moved ? moved.board : currentBoard;
 			});
 
@@ -511,7 +655,7 @@ export function useBoardInteractions({
 				optimisticMove: true,
 			});
 		},
-		[board, kickoffTaskInProgress, setBoard],
+		[board, getBacklogStartColumnId, kickoffTaskInProgress, setBoard],
 	);
 
 	const startBacklogTaskWithAnimation = useCallback(
@@ -522,7 +666,7 @@ export function useBoardInteractions({
 
 			await waitForBacklogCardHeightToSettle(task.id);
 
-			const programmaticMoveAttempt = tryProgrammaticCardMove(task.id, "backlog", "in_progress");
+			const programmaticMoveAttempt = tryProgrammaticCardMove(task.id, "backlog", getBacklogStartColumnId());
 			if (programmaticMoveAttempt === "blocked") {
 				await waitForProgrammaticCardMoveAvailability();
 				return startBacklogTaskWithAnimation(task);
@@ -551,6 +695,7 @@ export function useBoardInteractions({
 		},
 		[
 			kickoffTaskInProgress,
+			getBacklogStartColumnId,
 			resolvePendingProgrammaticStartMove,
 			selectedCard,
 			startBacklogTaskImmediately,
@@ -617,11 +762,13 @@ export function useBoardInteractions({
 			if (processedRef.current[key] === updatedAt) {
 				return;
 			}
+			const taskPrompt = findCardSelection(nextBoard, taskId)?.card.prompt ?? "";
 			queuedStagePrompts.push({
 				taskId,
 				stage,
 				updatedAt,
 				reason,
+				taskPrompt,
 			});
 		};
 
@@ -746,7 +893,7 @@ export function useBoardInteractions({
 					continue;
 				}
 
-				const targetColumnId = firstStageAutomationColumnId ?? getFirstPostInProgressColumnId();
+				const targetColumnId = firstPostInProgressStageAutomationColumnId ?? getFirstPostInProgressColumnId();
 				const targetStage = stageAutomationByColumnId.get(targetColumnId);
 				if (targetStage) {
 					const key = getStageAutomationPromptKey(summary.taskId, targetStage.columnId);
@@ -892,6 +1039,19 @@ export function useBoardInteractions({
 				continue;
 			}
 
+			if (summary.state === "running" && columnId === PLAN_REVIEW_COLUMN_ID) {
+				logStageAutomation(
+					summary.taskId,
+					"running task in plan review without classified prompt; routing to in progress",
+					{
+						currentColumnId: columnId,
+						summaryUpdatedAt: summary.updatedAt,
+					},
+				);
+				moveTaskForSession(summary, columnId, IN_PROGRESS_COLUMN_ID, { skipKickoff: true });
+				continue;
+			}
+
 			if (summary.state === "running" && columnId === REVIEW_COLUMN_ID) {
 				logStageAutomation(summary.taskId, "running task in review; routing back to in progress", {
 					currentColumnId: columnId,
@@ -966,7 +1126,11 @@ export function useBoardInteractions({
 				passTargetColumnId: queued.stage.passTargetColumnId,
 				failTargetColumnId: queued.stage.failTargetColumnId,
 			});
-			const prompt = queued.reason === "entry" ? queued.stage.promptTemplate : queued.stage.failurePromptTemplate;
+			const prompt = renderStagePromptForTask({
+				stage: queued.stage,
+				reason: queued.reason,
+				taskPrompt: queued.taskPrompt,
+			});
 			void (async () => {
 				let lastMessage: string | undefined;
 				for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -1004,6 +1168,7 @@ export function useBoardInteractions({
 		}
 	}, [
 		board,
+		firstPostInProgressStageAutomationColumnId,
 		programmaticCardMoveCycle,
 		sendAutomatedTaskPrompt,
 		sessions,
@@ -1140,7 +1305,7 @@ export function useBoardInteractions({
 			setBoard(applied.board);
 
 			if (
-				moveEvent.toColumnId === "in_progress" &&
+				moveEvent.toColumnId === getBacklogStartColumnId() &&
 				moveEvent.fromColumnId === "backlog" &&
 				!programmaticMoveBehavior?.skipKickoff
 			) {
@@ -1164,6 +1329,7 @@ export function useBoardInteractions({
 		[
 			board,
 			consumeProgrammaticCardMove,
+			getBacklogStartColumnId,
 			kickoffTaskInProgress,
 			maybeRequestNotificationPermissionForTaskStart,
 			requestMoveTaskToTrash,
@@ -1207,7 +1373,7 @@ export function useBoardInteractions({
 				if (!selection || selection.column.id !== "backlog") {
 					continue;
 				}
-				const moved = moveTaskToColumn(nextBoard, taskId, "in_progress", { insertAtTop: true });
+				const moved = moveTaskToColumn(nextBoard, taskId, getBacklogStartColumnId(), { insertAtTop: true });
 				if (!moved.moved) {
 					continue;
 				}
@@ -1230,7 +1396,7 @@ export function useBoardInteractions({
 				void kickoffTaskInProgress(task, task.id, "backlog");
 			}
 		},
-		[board, kickoffTaskInProgress, maybeRequestNotificationPermissionForTaskStart, setBoard],
+		[board, getBacklogStartColumnId, kickoffTaskInProgress, maybeRequestNotificationPermissionForTaskStart, setBoard],
 	);
 
 	const handleDetailTaskDragEnd = useCallback(
@@ -1417,6 +1583,7 @@ export function useBoardInteractions({
 		handleConfirmClearTrash,
 		handleAddReviewComments,
 		handleSendReviewComments,
+		handlePlanReviewPromptSubmission: movePlanReviewTaskForPrompt,
 		moveToTrashLoadingById,
 		trashTaskCount,
 	};
